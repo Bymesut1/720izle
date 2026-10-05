@@ -45,7 +45,7 @@ function dbg(msg) {
 }
 function debugStreams() {
   if (!DEBUG_MODE) return [];
-  return DEBUG.slice(0, 10).map(function (line, i) {
+  return DEBUG.slice(0, 14).map(function (line, i) {
     return {
       name: 'FilmMakinesi',
       title: 'DEBUG: ' + line,
@@ -310,6 +310,27 @@ async function resolveEmbed(embedUrl) {
 //  4) Nuvio giriş noktası
 // ------------------------------------------------------------
 
+// Bulunan yayın adresine, oynatıcının yapacağı gibi istek atıp sonucu debug'a yazar
+async function probeStream(r) {
+  try {
+    var res = await withTimeout(fetch(r.url, {
+      headers: { 'User-Agent': ANDROID_UA, 'Referer': r.referer }
+    }), 8000);
+    var ct = '?';
+    try { ct = res.headers.get('content-type') || '?'; } catch (e1) {}
+    var body = '';
+    try { body = await withTimeout(res.text(), 8000); } catch (e2) {}
+    var head = body.slice(0, 20).replace(/\s+/g, ' ');
+    var firstUri = (body.split('\n').filter(function (l) {
+      return l.trim() && l.trim().charAt(0) !== '#';
+    })[0] || '').trim().replace(/^https?:\/\//, '').slice(0, 55);
+    dbg('Yayın testi: HTTP ' + res.status + ' ' + ct.slice(0, 30) + ' "' + head + '"');
+    dbg('İlk bağlantı: ' + (firstUri || 'yok'));
+  } catch (e) {
+    dbg('Yayın testi hata: ' + e);
+  }
+}
+
 async function getStreams(tmdbId, mediaType, season, episode) {
   try {
     DEBUG.length = 0;
@@ -349,8 +370,9 @@ async function getStreams(tmdbId, mediaType, season, episode) {
     var streams = [];
     for (var i = 0; i < sources.length; i++) {
       var r = resolved[i];
-      dbg(sources[i].label + ': ' + (r ? 'adres bulundu' : 'adres YOK'));
+      dbg(sources[i].label + ': ' + (r ? r.url.replace(/^https?:\/\//, '').slice(0, 60) : 'adres YOK'));
       if (!r) continue;
+      if (DEBUG_MODE) await probeStream(r);
       streams.push({
         name: 'FilmMakinesi',
         title: '⌜ FILMMAKINESI ⌟ | ' + sources[i].label,
@@ -361,7 +383,7 @@ async function getStreams(tmdbId, mediaType, season, episode) {
       });
     }
     if (!streams.length) return debugStreams();
-    return streams;
+    return streams.concat(debugStreams());
   } catch (e) {
     dbg('hata: ' + e);
     return debugStreams();
