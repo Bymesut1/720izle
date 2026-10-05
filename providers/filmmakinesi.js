@@ -7,12 +7,33 @@ var PRIMARY_DOMAIN = 'https://filmmakinesi.to';
 var TMDB_KEY = '000316508321ce461cf81e7c6815eec7';
 var ANDROID_UA = 'Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/146.0.0.0 Mobile Safari/537.36';
 
+var DESKTOP_UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/146.0.0.0 Safari/537.36';
+
 var PAGE_HEADERS = {
   'User-Agent': ANDROID_UA,
-  'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
-  'Accept-Language': 'tr-TR,tr;q=0.9',
-  'Referer': PRIMARY_DOMAIN + '/'
+  'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8',
+  'Accept-Language': 'tr-TR,tr;q=0.9,en-US;q=0.8,en;q=0.7',
+  'Referer': PRIMARY_DOMAIN + '/',
+  'Upgrade-Insecure-Requests': '1',
+  'Sec-Fetch-Dest': 'document',
+  'Sec-Fetch-Mode': 'navigate',
+  'Sec-Fetch-Site': 'same-origin',
+  'Sec-Fetch-User': '?1',
+  'sec-ch-ua-mobile': '?1',
+  'sec-ch-ua-platform': '"Android"'
 };
+
+// Site 403 verirse sırayla bu başlık setleri denenir
+var HEADER_SETS = [
+  PAGE_HEADERS,
+  {
+    'User-Agent': DESKTOP_UA,
+    'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+    'Accept-Language': 'tr-TR,tr;q=0.9,en;q=0.8'
+  },
+  { 'User-Agent': ANDROID_UA }
+];
+var blockInfoShown = false;
 
 // Geçici hata ayıklama: true iken akış çıkmazsa, hatanın nerede olduğunu
 // akış listesinde "DEBUG:" satırları olarak gösterir. Çalışınca false yap.
@@ -24,7 +45,7 @@ function dbg(msg) {
 }
 function debugStreams() {
   if (!DEBUG_MODE) return [];
-  return DEBUG.slice(0, 8).map(function (line, i) {
+  return DEBUG.slice(0, 10).map(function (line, i) {
     return {
       name: 'FilmMakinesi',
       title: 'DEBUG: ' + line,
@@ -57,20 +78,33 @@ function norm(s) {
 }
 
 async function getText(url, headers) {
-  try {
-    var short = String(url).replace(/^https?:\/\//, '').slice(0, 45);
-    var res = await withTimeout(fetch(url, { headers: headers || PAGE_HEADERS }), 8000);
-    if (!res.ok) {
-      dbg('HTTP ' + res.status + ' ' + short);
-      return '';
+  var short = String(url).replace(/^https?:\/\//, '').slice(0, 40);
+  var sets = headers ? [headers] : HEADER_SETS;
+  var codes = [];
+  for (var i = 0; i < sets.length; i++) {
+    try {
+      var res = await withTimeout(fetch(url, { headers: sets[i] }), 8000);
+      if (res.ok) {
+        var text = await withTimeout(res.text(), 8000);
+        dbg('OK ' + text.length + ' kar. ' + (i ? '(set ' + (i + 1) + ') ' : '') + short);
+        return text;
+      }
+      codes.push(res.status);
+      // İlk engelde sunucu ve sayfa içeriğinden ipucu al (örn. Cloudflare)
+      if (!blockInfoShown) {
+        blockInfoShown = true;
+        var server = '?';
+        try { server = res.headers.get('server') || '?'; } catch (e1) {}
+        var snippet = '';
+        try { snippet = stripTags(await withTimeout(res.text(), 5000)).slice(0, 60); } catch (e2) {}
+        dbg('Engel: server=' + server + ' içerik="' + snippet + '"');
+      }
+    } catch (e) {
+      codes.push('hata');
     }
-    var text = await withTimeout(res.text(), 8000);
-    dbg('OK ' + text.length + ' kar. ' + short);
-    return text;
-  } catch (e) {
-    dbg('İstek hatası ' + e + ' ' + String(url).replace(/^https?:\/\//, '').slice(0, 45));
-    return '';
   }
+  dbg('HTTP ' + codes.join('/') + ' ' + short);
+  return '';
 }
 
 // ------------------------------------------------------------
@@ -279,6 +313,7 @@ async function resolveEmbed(embedUrl) {
 async function getStreams(tmdbId, mediaType, season, episode) {
   try {
     DEBUG.length = 0;
+    blockInfoShown = false;
     dbg('tür=' + mediaType + ' tmdb=' + tmdbId);
 
     // Şimdilik sadece film
