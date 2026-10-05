@@ -14,6 +14,27 @@ var PAGE_HEADERS = {
   'Referer': PRIMARY_DOMAIN + '/'
 };
 
+// Geçici hata ayıklama: true iken akış çıkmazsa, hatanın nerede olduğunu
+// akış listesinde "DEBUG:" satırları olarak gösterir. Çalışınca false yap.
+var DEBUG_MODE = true;
+var DEBUG = [];
+function dbg(msg) {
+  DEBUG.push(String(msg));
+  console.log('[FilmMakinesi] ' + msg);
+}
+function debugStreams() {
+  if (!DEBUG_MODE) return [];
+  return DEBUG.slice(0, 8).map(function (line, i) {
+    return {
+      name: 'FilmMakinesi',
+      title: 'DEBUG: ' + line,
+      url: 'https://debug.invalid/' + i + '.m3u8',
+      quality: 'Auto',
+      type: 'hls'
+    };
+  });
+}
+
 function withTimeout(promise, ms) {
   return new Promise(function (resolve, reject) {
     var t = setTimeout(function () { reject(new Error('timeout')); }, ms);
@@ -37,14 +58,17 @@ function norm(s) {
 
 async function getText(url, headers) {
   try {
+    var short = String(url).replace(/^https?:\/\//, '').slice(0, 45);
     var res = await withTimeout(fetch(url, { headers: headers || PAGE_HEADERS }), 8000);
     if (!res.ok) {
-      console.log('[FilmMakinesi] HTTP ' + res.status + ' -> ' + url);
+      dbg('HTTP ' + res.status + ' ' + short);
       return '';
     }
-    return await withTimeout(res.text(), 8000);
+    var text = await withTimeout(res.text(), 8000);
+    dbg('OK ' + text.length + ' kar. ' + short);
+    return text;
   } catch (e) {
-    console.log('[FilmMakinesi] istek hatası: ' + url + ' ' + e);
+    dbg('İstek hatası ' + e + ' ' + String(url).replace(/^https?:\/\//, '').slice(0, 45));
     return '';
   }
 }
@@ -244,7 +268,7 @@ async function resolveEmbed(embedUrl) {
     }
   }
 
-  console.log('[FilmMakinesi] yayın adresi bulunamadı: ' + clean + ' (sayfa ' + html.length + ' karakter)');
+  dbg('oynatıcıda m3u8/hls adresi yok: ' + clean.replace(/^https?:\/\//, '').slice(0, 40));
   return null;
 }
 
@@ -254,6 +278,9 @@ async function resolveEmbed(embedUrl) {
 
 async function getStreams(tmdbId, mediaType, season, episode) {
   try {
+    DEBUG.length = 0;
+    dbg('tür=' + mediaType + ' tmdb=' + tmdbId);
+
     // Şimdilik sadece film
     if (mediaType !== 'movie') return [];
 
@@ -266,17 +293,20 @@ async function getStreams(tmdbId, mediaType, season, episode) {
     var origTitle = info.original_title;
     var imdbId = info.imdb_id || '';
     var year = (info.release_date || '').slice(0, 4);
-    if (!title || !year) return [];
+    dbg('TMDB: ' + title + ' ' + year + ' ' + (imdbId || 'imdb yok'));
+    if (!title || !year) return debugStreams();
 
     // 2) Doğru film sayfasını bul
     var found = await findMoviePage(imdbId, title, origTitle, year);
     if (!found) {
-      console.log('[FilmMakinesi] film bulunamadı: ' + title);
-      return [];
+      dbg('film sayfası bulunamadı');
+      return debugStreams();
     }
+    dbg('film sayfası: ' + found.url.replace(/^https?:\/\//, '').slice(0, 45));
 
     // 3) Sayfadaki kaynakları al, hepsini aynı anda çöz
     var sources = extractSources(found.html);
+    dbg('kaynak sayısı: ' + sources.length);
     var resolved = await Promise.all(sources.map(function (s) {
       return resolveEmbed(s.url).catch(function () { return null; });
     }));
@@ -284,6 +314,7 @@ async function getStreams(tmdbId, mediaType, season, episode) {
     var streams = [];
     for (var i = 0; i < sources.length; i++) {
       var r = resolved[i];
+      dbg(sources[i].label + ': ' + (r ? 'adres bulundu' : 'adres YOK'));
       if (!r) continue;
       streams.push({
         name: 'FilmMakinesi',
@@ -294,10 +325,11 @@ async function getStreams(tmdbId, mediaType, season, episode) {
         headers: { 'User-Agent': ANDROID_UA, 'Referer': r.referer }
       });
     }
+    if (!streams.length) return debugStreams();
     return streams;
   } catch (e) {
-    console.log('[FilmMakinesi] hata: ' + e);
-    return [];
+    dbg('hata: ' + e);
+    return debugStreams();
   }
 }
 
