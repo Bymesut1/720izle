@@ -45,18 +45,63 @@ function dbg(msg) {
 }
 function debugStreams() {
   if (!DEBUG_MODE) return [];
+  var rows = PASTES.map(function (p) {
+    return {
+      name: 'FilmMakinesi',
+      title: p.link ? p.link : 'PASTE HATA ' + p.err,
+      url: 'https://d.invalid/' + p.tag + '_sayfa_kaynagi',
+      quality: 'Auto',
+      type: 'hls'
+    };
+  });
   // Başlık tek satırda kesiliyor, adres ise alt satırlara sarılıyor;
   // bu yüzden bilgiyi adres alanına yazıyoruz.
-  return DEBUG.slice(0, 7).map(function (line, i) {
+  DEBUG.forEach(function (line, i) {
     var text = String(line).replace(/[^A-Za-z0-9._:=\/?&%-]+/g, '_').slice(0, 200);
-    return {
+    rows.push({
       name: 'FilmMakinesi',
       title: 'DEBUG ' + (i + 1),
       url: 'https://d.invalid/' + text,
       quality: 'Auto',
       type: 'hls'
-    };
+    });
   });
+  return rows.slice(0, 7);
+}
+
+var PASTES = [];
+
+// DEBUG: bulunamayan oynatıcı sayfasının kaynağını geçici bir paste bağlantısına yükler
+// (bağlantıyı sana test ekranında gösterir; DEBUG_MODE=false olunca çalışmaz)
+async function uploadDebug(tag, html) {
+  var text = String(html).slice(0, 150000);
+  var link = '';
+  var err = '';
+  try {
+    var res = await withTimeout(fetch('https://dpaste.com/api/v2/', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded', 'User-Agent': ANDROID_UA },
+      body: 'content=' + encodeURIComponent(text) + '&syntax=html&expiry_days=1'
+    }), 12000);
+    var out = (await withTimeout(res.text(), 5000)).trim();
+    if (/^https?:\/\//.test(out)) link = out; else err = 'dpaste ' + res.status;
+  } catch (e) {
+    err = 'dpaste hata';
+  }
+  if (!link) {
+    try {
+      var res2 = await withTimeout(fetch('https://paste.rs', {
+        method: 'POST',
+        headers: { 'Content-Type': 'text/plain', 'User-Agent': ANDROID_UA },
+        body: text
+      }), 12000);
+      var out2 = (await withTimeout(res2.text(), 5000)).trim();
+      if (/^https?:\/\//.test(out2)) link = out2; else err += ' pasters ' + res2.status;
+    } catch (e2) {
+      err += ' pasters hata';
+    }
+  }
+  PASTES.push({ tag: tag, link: link, err: err });
 }
 
 function withTimeout(promise, ms) {
@@ -231,22 +276,32 @@ function isMediaUrl(u) {
   return /\.(m3u8|mp4)(\?|$)/i.test(u) || /\/hls\/|sublist|master|playlist/i.test(u);
 }
 
-function pickMediaUrl(text) {
+function pickMediaUrl(text, embedId) {
   var patterns = [
     /["']?file["']?\s*:\s*["']([^"']+)["']/g,
     /<source[^>]+src=["']([^"']+)["']/g,
     /(https?:\/\/[^"'\s<>\\]+\.(?:m3u8|txt)(?:\?[^"'\s<>\\]*)?)/g,
     /(https?:\/\/[^"'\s<>\\]+\/hls\/[^"'\s<>\\]+)/g
   ];
+  var found = [];
   for (var i = 0; i < patterns.length; i++) {
     var re = patterns[i], m;
     re.lastIndex = 0;
     while ((m = re.exec(text)) !== null) {
       var u = cleanUrl(m[1]);
-      if (isMediaUrl(u)) return u;
+      if (isMediaUrl(u) && found.indexOf(u) === -1) found.push(u);
     }
   }
-  return null;
+  if (!found.length) return null;
+  // Sayfada başka (ör. reklam/tanıtım) videolar da olabilir: filmin kendi
+  // oynatıcı kimliğini içeren adresi seç. Yoksa hiçbirini kabul etme.
+  if (embedId) {
+    for (var j = 0; j < found.length; j++) {
+      if (found[j].indexOf(embedId) > -1) return found[j];
+    }
+    return null;
+  }
+  return found[0];
 }
 
 // eval(function(p,a,c,k,e,d){...}('...',a,c,'...'.split('|'))) açıcı
@@ -297,29 +352,24 @@ async function resolveEmbed(embedUrl) {
   if (!html) return null;
 
   var tag = ((clean.match(/\/\/([a-z0-9-]+)\./i) || [])[1] || 'embed').toUpperCase();
+  var embedId = (clean.match(/embed[\/-]([A-Za-z0-9_-]{6,})/) || [])[1] || '';
 
   var texts = collectTexts(html);
   for (var i = 0; i < texts.length; i++) {
-    var u = pickMediaUrl(texts[i]);
+    var u = pickMediaUrl(texts[i], embedId);
     if (u) {
       var isHls = /\.m3u8|sublist|master|playlist|\/hls\//i.test(u);
-      // Adresin sayfada hangi ifadenin yanında bulunduğunu göster
-      var pos = texts[i].indexOf(u.slice(0, 40));
-      var ctx = pos > -1 ? texts[i].slice(Math.max(0, pos - 60), pos).replace(/\s+/g, ' ') : '?';
-      dbg(tag + ' bulundu(' + (i ? 'cozulmus' : 'duz') + ') oncesi: ' + ctx + ' | sonrasi: ' +
-          (pos > -1 ? texts[i].slice(pos + u.length, pos + u.length + 30).replace(/\s+/g, ' ') : '?'));
       return { url: u, type: isHls ? 'hls' : 'mp4', quality: 'Auto', referer: origin + '/', embed: clean };
     }
   }
 
-  // Bulunamadıysa sayfada ne olduğuna dair ipuçları
-  var flags = ['eval(function', 'atob(', 'm3u8', 'file', 'sources', 'fetch(', 'iframe', '<video']
-    .filter(function (f) { return html.indexOf(f) > -1; }).join(',');
-  var urls = (html.match(/https?:\/\/[^"'\s<>\\]+/g) || [])
-    .filter(function (x) { return !/googleapis|gstatic|cdnjs|jquery|cloudflare|w3\.org|schema\.org/i.test(x); })
-    .slice(0, 3)
-    .map(function (x) { return x.replace(/^https?:\/\//, '').slice(0, 45); }).join(' ');
-  dbg(tag + ' yok: uzunluk=' + html.length + ' [' + flags + '] ' + urls);
+  // Bulunamadı: kısa özet + (debug modunda) sayfa kaynağını paylaşılabilir bir bağlantıya yükle
+  var cands = 0;
+  texts.forEach(function (t) {
+    (t.match(/https?:\/\/[^"'\s<>\\]+\.(?:m3u8|txt)/g) || []).forEach(function () { cands++; });
+  });
+  dbg(tag + ' yok id=' + (embedId || '?') + ' uzunluk=' + html.length + ' aday=' + cands);
+  if (DEBUG_MODE) await uploadDebug(tag, html);
   return null;
 }
 
@@ -365,6 +415,7 @@ async function probeStream(r) {
 async function getStreams(tmdbId, mediaType, season, episode) {
   try {
     DEBUG.length = 0;
+    PASTES.length = 0;
     blockInfoShown = false;
 
     // Şimdilik sadece film
