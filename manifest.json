@@ -1,6 +1,6 @@
 {
   "name": "FilmMakinesi",
-  "version": "1.0.1",
+  "version": "1.0.2",
   "description": "FilmMakinesi.to Nuvio eklentisi",
   "author": "Bymesut1",
   "scrapers": [
@@ -8,7 +8,7 @@
       "id": "filmmakinesi",
       "name": "FilmMakinesi",
       "description": "filmmakinesi.to üzerinden Türkçe dublaj ve altyazılı filmler",
-      "version": "1.0.1",
+      "version": "1.0.2",
       "filename": "providers/filmmakinesi.js",
       "supportedTypes": ["movie"],
       "formats": ["m3u8", "mp4"],
