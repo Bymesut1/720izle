@@ -86,7 +86,7 @@ async function getText(url, headers) {
       var res = await withTimeout(fetch(url, { headers: sets[i] }), 8000);
       if (res.ok) {
         var text = await withTimeout(res.text(), 8000);
-        dbg('OK ' + text.length + ' kar. ' + (i ? '(set ' + (i + 1) + ') ' : '') + short);
+        if (i) dbg('OK (set ' + (i + 1) + ') ' + short);
         return text;
       }
       codes.push(res.status);
@@ -335,7 +335,6 @@ async function getStreams(tmdbId, mediaType, season, episode) {
   try {
     DEBUG.length = 0;
     blockInfoShown = false;
-    dbg('tür=' + mediaType + ' tmdb=' + tmdbId);
 
     // Şimdilik sadece film
     if (mediaType !== 'movie') return [];
@@ -358,11 +357,10 @@ async function getStreams(tmdbId, mediaType, season, episode) {
       dbg('film sayfası bulunamadı');
       return debugStreams();
     }
-    dbg('film sayfası: ' + found.url.replace(/^https?:\/\//, '').slice(0, 45));
 
     // 3) Sayfadaki kaynakları al, hepsini aynı anda çöz
     var sources = extractSources(found.html);
-    dbg('kaynak sayısı: ' + sources.length);
+    dbg('Sayfa bulundu, kaynak sayısı: ' + sources.length);
     var resolved = await Promise.all(sources.map(function (s) {
       return resolveEmbed(s.url).catch(function () { return null; });
     }));
