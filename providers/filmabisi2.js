@@ -446,7 +446,7 @@ function resolveSource(url, pageUrl) {
 function makeStream(label, r) {
   return {
     name: SITE_AYARLARI.EKLENTI_ADI,
-    title: '⌜ ' + SITE_AYARLARI.EKLENTI_ADI.toUpperCase() + ' ⌟ | ' + label,
+    title: label,
     url: r.url,
     quality: r.quality || 'Auto',
     type: r.type,
@@ -501,7 +501,7 @@ function getStreams(tmdbId, mediaType, season, episode) {
             var r = resolved[i];
             if (!r || seen[r.url]) continue;
             seen[r.url] = true;
-            var label = /rapid/i.test(sources[i].url) ? 'RapidVid' : sources[i].label;
+            var label = /rapid/i.test(sources[i].url) ? 'RapidVid | ' + String(sources[i].label).toLowerCase() : sources[i].label;
             streams.push(makeStream(label, r));
           }
           if (!streams.length) return debugStream('cozulemedi: ' + stage);
