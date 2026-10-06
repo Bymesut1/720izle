@@ -1,33 +1,32 @@
 // ============================================================
-//  DÜZENLEYECEĞİNİZ ALAN (SADECE TIRNAK İÇLERİNİ SİLİP DOLDURUN)
-//  DİKKAT: Tırnak işaretlerinin '...' kendisini KESİNLİKLE SİLMEYİN!
+//  DÜZENLEYECEĞİNİZ ALAN
 // ============================================================
 
 var SITE_AYARLARI = {
   // 1. Sitenin Ana Adresi
-  PRIMARY_DOMAIN: 'ÖRNEK: https://www.hdfilmcehennemi.life',
+  PRIMARY_DOMAIN: 'https://www.fullhdfilmizlesene.now',
 
   // 2. Arama Adresi Eki (Arama yapınca adreste çıkan ek)
-  ARAMA_YOLU: 'ÖRNEK: /ara?q=',
+  ARAMA_YOLU: '/arama/',
 
-  // 3. Film Link Eki (Filme tıklayınca adreste ne yazıyorsa, örn: /film/ veya /izle/)
-  FILM_LINK_EKI: 'ÖRNEK: /film/',
+  // 3. Film Link Eki (Filme tıklayınca adreste ne yazıyorsa)
+  FILM_LINK_EKI: '/film/',
 
   // 4. Arama Sonucundaki Film Kartının HTML Sınıfı/Etiketi
-  ARAMA_KART_ETIKETI: 'ÖRNEK: <article class="card">',
+  ARAMA_KART_ETIKETI: '<li class="film">',
 
   // 5. Film Detay Sayfasındaki Başlığın Class (Sınıf) Adı
-  HERO_TITLE_CLASS: 'ÖRNEK: hero-title',
+  HERO_TITLE_CLASS: 'film-title',
 
-  // 6. Film Detay Sayfasındaki Yıl / Alt Başlığın Class (Sınıf) Adı
-  HERO_SUB_CLASS: 'ÖRNEK: hero-sub',
+  // 6. Film Detay Sayfasındaki Alt Başlığın Class (Sınıf) Adı
+  HERO_SUB_CLASS: 'kt',
 
   // 7. Eklentinin Menüde Görünecek Adı
-  EKLENTI_ADI: 'ÖRNEK: HD Film Cehennemi'
+  EKLENTI_ADI: 'FullHDFilmizlesene'
 };
 
 // ============================================================
-//  AŞAĞIDAKİ KODLARA DOKUNMANIZA GEREK YOKTUR
+//  AŞAĞIDAKİ KODLAR ÇALIŞMA MANTIĞINI SAĞLAR
 // ============================================================
 
 var TMDB_KEY = '000316508321ce461cf81e7c6815eec7';
@@ -51,6 +50,14 @@ function withTimeout(promise, ms) {
 function decodeHtml(s) {
   return String(s || '').replace(/&quot;/g, '"').replace(/&#0?39;/g, "'")
     .replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&amp;/g, '&');
+}
+
+function safeAtob(b64) {
+  try {
+    if (typeof atob === 'function') return atob(b64);
+    if (typeof Buffer !== 'undefined') return Buffer.from(b64, 'base64').toString('binary');
+  } catch (e) {}
+  return '';
 }
 
 function norm(s) {
@@ -83,10 +90,11 @@ function isRightMovie(html, title, origTitle, year) {
   var y = parseInt(year, 10);
   var yearOk = false;
   for (var d = -1; d <= 1; d++) {
-    if (sub.indexOf('(' + (y + d) + ')') > -1) yearOk = true;
+    if (html.indexOf(String(y + d)) > -1) yearOk = true;
   }
   var titleOk = (origTitle && norm(sub).indexOf(norm(origTitle)) > -1) ||
-                (title && norm(h1) === norm(title));
+                (title && norm(h1) === norm(title)) ||
+                (origTitle && norm(h1).indexOf(norm(origTitle)) > -1);
   return yearOk && titleOk;
 }
 
@@ -152,6 +160,18 @@ async function findMoviePage(title, origTitle, year) {
 
 function extractSources(html) {
   var list = [];
+
+  // 1. FullHDFilmizlesene Base64 (data-code) Oynatıcı Çözücü
+  var frgMatch = html.match(/class="frg"[^>]*data-code="([^"]+)"/);
+  if (frgMatch && frgMatch[1]) {
+    var decoded = safeAtob(frgMatch[1]);
+    var srcMatch = decoded.match(/src=["']([^"']+)["']/);
+    if (srcMatch && srcMatch[1]) {
+      list.push({ url: decodeHtml(srcMatch[1]), label: 'Ana Kaynak' });
+    }
+  }
+
+  // 2. Standart kaynak arama
   var re = /loadSource\('([^']+)'\s*,\s*this\)[^>]*>([\s\S]*?)<\/button>/g, m;
   while ((m = re.exec(html)) !== null) {
     var url = decodeHtml(m[1]);
@@ -159,10 +179,12 @@ function extractSources(html) {
     if (/youtube\.com|youtu\.be/.test(url) || /fragman/i.test(label)) continue;
     list.push({ url: url, label: label });
   }
+
   if (!list.length) {
     var d = html.match(/data-src="([^"]+)"/);
     if (d && /ok\.ru/.test(d[1])) list.push({ url: decodeHtml(d[1]), label: 'Varsayılan' });
   }
+
   return list;
 }
 
