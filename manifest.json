@@ -1,14 +1,21 @@
 {
-  "id": "com.fullhdfilmizlesene.provider",
   "name": "FullHD Filmizlesene",
   "version": "1.0.0",
-  "manifestVersion": 1,
-  "description": "FullHD Filmizlesene sitesi için Atom/RapidVid ve Vidmoly destekli film izleme eklentisi.",
-  "author": "Developer",
-  "icon": "https://www.fullhdfilmizlesene.pw/favicon.ico",
-  "script": "720izle.js",
-  "language": "tr",
-  "types": [
-    "movie"
+  "scrapers": [
+    {
+      "id": "fullhdfilmizlesene",
+      "name": "FullHD Filmizlesene",
+      "description": "fullhdfilmizlesene üzerinden Türkçe dublaj/altyazılı filmler",
+      "version": "1.0.0",
+      "filename": "fullhdfilmizlesene.js",
+      "supportedTypes": [
+        "movie"
+      ],
+      "enabled": true,
+      "formats": [
+        "mp4",
+        "hls"
+      ]
+    }
   ]
 }
