@@ -1,15 +1,15 @@
 {
   "name": "filmabisi2",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "scrapers": [
     {
       "id": "filmabisi2",
       "name": "filmabisi2",
       "description": "Türkçe dublaj/altyazılı film kaynağı",
-      "version": "1.0.0",
+      "version": "1.0.1",
       "author": "custom",
       "supportedTypes": ["movie"],
-      "filename": "filmabisi2.js",
+      "filename": "providers/filmabisi2.js",
       "enabled": true,
       "hasSettings": false,
       "formats": ["m3u8", "mp4"],
