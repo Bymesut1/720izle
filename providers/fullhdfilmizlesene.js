@@ -31,6 +31,7 @@ var SITE_AYARLARI = {
 // ============================================================
 
 var TMDB_KEY = '000316508321ce461cf81e7c6815eec7';
+var PROVIDER_ID = 'fullhdfilmizlesene';
 var ANDROID_UA = 'Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/146.0.0.0 Mobile Safari/537.36';
 
 var PAGE_HEADERS = {
@@ -39,6 +40,8 @@ var PAGE_HEADERS = {
   'Accept-Language': 'tr-TR,tr;q=0.9',
   'Referer': SITE_AYARLARI.PRIMARY_DOMAIN + '/'
 };
+
+// ---- Yardımcılar (Nuvio/Hermes uyumlu: async/await YOK, sadece Promise) ----
 
 function withTimeout(promise, ms) {
   return new Promise(function (resolve, reject) {
@@ -64,20 +67,21 @@ function slugify(s) {
     .replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '');
 }
 
-async function getText(url, headers) {
-  try {
-    var res = await withTimeout(fetch(url, { headers: headers || PAGE_HEADERS }), 8000);
-    if (!res.ok) return '';
-    return await withTimeout(res.text(), 8000);
-  } catch (e) {
-    return '';
-  }
+function getText(url, headers) {
+  return withTimeout(fetch(url, { headers: headers || PAGE_HEADERS }), 8000)
+    .then(function (res) {
+      if (!res.ok) return '';
+      return withTimeout(res.text(), 8000);
+    })
+    .catch(function () { return ''; });
 }
+
+// ---- Film sayfasını bulma ----
 
 function isRightMovie(html, title, origTitle, year) {
   var subRe = new RegExp('class="' + SITE_AYARLARI.HERO_SUB_CLASS + '"[^>]*>\\s*([^<]+)');
   var h1Re = new RegExp('class="' + SITE_AYARLARI.HERO_TITLE_CLASS + '"[^>]*>\\s*([^<]+)');
-  
+
   var sub = (html.match(subRe) || [])[1] || '';
   var h1 = (html.match(h1Re) || [])[1] || '';
   var y = parseInt(year, 10);
@@ -107,7 +111,7 @@ function parseSearchCards(html) {
   return cards;
 }
 
-async function findMoviePage(title, origTitle, year) {
+function findMoviePage(title, origTitle, year) {
   var y = parseInt(year, 10);
   var nTitle = norm(title);
   var nOrig = norm(origTitle);
@@ -115,40 +119,44 @@ async function findMoviePage(title, origTitle, year) {
   function add(p) { if (p && paths.indexOf(p) === -1) paths.push(p); }
 
   var queries = [origTitle, title].filter(function (q, i, a) { return q && a.indexOf(q) === i; });
-  var results = await Promise.all(queries.map(function (q) {
+
+  return Promise.all(queries.map(function (q) {
     return getText(SITE_AYARLARI.PRIMARY_DOMAIN + SITE_AYARLARI.ARAMA_YOLU + encodeURIComponent(q));
-  }));
+  })).then(function (results) {
+    var cards = [];
+    results.forEach(function (html) {
+      parseSearchCards(html).forEach(function (c) { cards.push(c); });
+    });
 
-  var cards = [];
-  results.forEach(function (html) {
-    parseSearchCards(html).forEach(function (c) { cards.push(c); });
-  });
-
-  function yearOk(c) { return c.year && Math.abs(c.year - y) <= 1; }
-  function titleOk(c) {
-    var n = norm(c.title);
-    return n && (n === nTitle || n === nOrig);
-  }
-
-  cards.filter(function (c) { return yearOk(c) && titleOk(c); }).forEach(function (c) { add(c.path); });
-  cards.filter(function (c) { return yearOk(c); }).forEach(function (c) { add(c.path); });
-
-  add(SITE_AYARLARI.FILM_LINK_EKI + slugify(title));
-  add(SITE_AYARLARI.FILM_LINK_EKI + slugify(origTitle));
-
-  cards.filter(function (c) { return titleOk(c); }).forEach(function (c) { add(c.path); });
-
-  var candidates = paths.slice(0, 6);
-  var pages = await Promise.all(candidates.map(function (p) {
-    return getText(SITE_AYARLARI.PRIMARY_DOMAIN + p);
-  }));
-  for (var i = 0; i < pages.length; i++) {
-    if (pages[i] && isRightMovie(pages[i], title, origTitle, year)) {
-      return { url: SITE_AYARLARI.PRIMARY_DOMAIN + candidates[i], html: pages[i] };
+    function yearOk(c) { return c.year && Math.abs(c.year - y) <= 1; }
+    function titleOk(c) {
+      var n = norm(c.title);
+      return n && (n === nTitle || n === nOrig);
     }
-  }
-  return null;
+
+    cards.filter(function (c) { return yearOk(c) && titleOk(c); }).forEach(function (c) { add(c.path); });
+    cards.filter(function (c) { return yearOk(c); }).forEach(function (c) { add(c.path); });
+
+    add(SITE_AYARLARI.FILM_LINK_EKI + slugify(title));
+    add(SITE_AYARLARI.FILM_LINK_EKI + slugify(origTitle));
+
+    cards.filter(function (c) { return titleOk(c); }).forEach(function (c) { add(c.path); });
+
+    var candidates = paths.slice(0, 6);
+    return Promise.all(candidates.map(function (p) {
+      return getText(SITE_AYARLARI.PRIMARY_DOMAIN + p);
+    })).then(function (pages) {
+      for (var i = 0; i < pages.length; i++) {
+        if (pages[i] && isRightMovie(pages[i], title, origTitle, year)) {
+          return { url: SITE_AYARLARI.PRIMARY_DOMAIN + candidates[i], html: pages[i] };
+        }
+      }
+      return null;
+    });
+  });
 }
+
+// ---- Kaynak çıkarma ----
 
 function extractSources(html) {
   var list = [];
@@ -183,7 +191,6 @@ function unpackPacked(src) {
 function findStreamUrl(text) {
   text = String(text || '').replace(/\\\//g, '/').replace(/&amp;/g, '&');
 
-  // Static, CDN, .shop ve .m3u8 adreslerini kapsayan dinamik arama
   var shopMatch = text.match(/(https?:\/\/[^\s"'<>]+?\.(?:static\d+|cdnimgs\d+|shop)[^\s"'<>]*)/i);
   if (shopMatch) {
     return { url: shopMatch[1], type: 'hls', quality: 'Auto' };
@@ -203,9 +210,7 @@ function findStreamUrl(text) {
   return null;
 }
 
-// ============================================================
-// ATOM / RAPIDVID (SCX JSON) ÇÖZÜCÜ ENTEGRASYONU
-// ============================================================
+// ---- Atom / RapidVid (SCX JSON) ----
 
 function getAtomTokenFromHtml(html) {
   try {
@@ -213,192 +218,181 @@ function getAtomTokenFromHtml(html) {
     if (!match || !match[1]) return null;
     var scxObj = JSON.parse(match[1]);
     if (scxObj && scxObj.atom && scxObj.atom.sx && scxObj.atom.sx.t && scxObj.atom.sx.t[0]) {
-      return scxObj.atom.sx.t[0]; // "nUE0pUZ6Yl9lLK..." token verisi
+      return scxObj.atom.sx.t[0];
     }
   } catch (e) {}
   return null;
 }
 
-async function resolveAtom(token, pageUrl) {
-  if (!token) return null;
+function resolveAtom(token, pageUrl) {
+  if (!token) return Promise.resolve(null);
   var endpoint = SITE_AYARLARI.PRIMARY_DOMAIN + '/ajax/player';
   var commonHeaders = {
     'User-Agent': ANDROID_UA,
     'Referer': pageUrl,
     'X-Requested-With': 'XMLHttpRequest'
   };
+  var postHeaders = {
+    'User-Agent': ANDROID_UA,
+    'Referer': pageUrl,
+    'X-Requested-With': 'XMLHttpRequest',
+    'Content-Type': 'application/x-www-form-urlencoded; charset=UTF-8'
+  };
 
-  var rawRes = '';
-
-  // 1. POST İsteği Dene
-  try {
-    var postRes = await withTimeout(fetch(endpoint, {
-      method: 'POST',
-      headers: Object.assign({}, commonHeaders, {
-        'Content-Type': 'application/x-www-form-urlencoded; charset=UTF-8'
-      }),
-      body: 'token=' + encodeURIComponent(token) + '&id=' + encodeURIComponent(token)
-    }), 8000);
-    if (postRes.ok) rawRes = await postRes.text();
-  } catch (e) {}
-
-  // 2. POST Başarısız/Boşsa GET İsteği Dene
-  if (!rawRes || rawRes.length < 20) {
-    try {
+  return withTimeout(fetch(endpoint, {
+    method: 'POST',
+    headers: postHeaders,
+    body: 'token=' + encodeURIComponent(token) + '&id=' + encodeURIComponent(token)
+  }), 8000)
+    .then(function (r) { return r.ok ? r.text() : ''; })
+    .catch(function () { return ''; })
+    .then(function (raw) {
+      if (raw && raw.length >= 20) return raw;
       var getUrl = endpoint + '?token=' + encodeURIComponent(token) + '&id=' + encodeURIComponent(token);
-      var getRes = await withTimeout(fetch(getUrl, { headers: commonHeaders }), 8000);
-      if (getRes.ok) rawRes = await getRes.text();
-    } catch (e) {}
-  }
-
-  if (!rawRes) return null;
-
-  // Yanıttan Akış Bağlantısını Çıkar
-  var stream = findStreamUrl(rawRes);
-  if (!stream) {
-    var unpacked = unpackPacked(rawRes);
-    if (unpacked) stream = findStreamUrl(unpacked);
-  }
-
-  if (stream) {
-    stream.headers = {
-      'User-Agent': ANDROID_UA,
-      'Referer': pageUrl
-    };
-    return stream;
-  }
-
-  return null;
+      return withTimeout(fetch(getUrl, { headers: commonHeaders }), 8000)
+        .then(function (r) { return r.ok ? r.text() : ''; })
+        .catch(function () { return ''; });
+    })
+    .then(function (raw) {
+      if (!raw) return null;
+      var stream = findStreamUrl(raw);
+      if (!stream) {
+        var unpacked = unpackPacked(raw);
+        if (unpacked) stream = findStreamUrl(unpacked);
+      }
+      if (stream) {
+        stream.headers = { 'User-Agent': ANDROID_UA, 'Referer': pageUrl };
+        return stream;
+      }
+      return null;
+    });
 }
 
-// ============================================================
-// DİĞER SAĞLAYICI ÇÖZÜCÜLERİ
-// ============================================================
+// ---- Diğer sağlayıcılar ----
 
-async function resolveVidmoly(embedUrl) {
+function resolveVidmoly(embedUrl) {
   var clean = embedUrl.split('?')[0];
   var tries = [clean];
   var biz = clean.replace(/^https?:\/\/[^\/]+/, 'https://vidmoly.biz');
   if (biz !== clean) tries.push(biz);
 
-  for (var t = 0; t < tries.length; t++) {
-    var html = await getText(tries[t], {
+  function attempt(t) {
+    if (t >= tries.length) return Promise.resolve(null);
+    return getText(tries[t], {
       'User-Agent': ANDROID_UA,
       'Accept': 'text/html,*/*;q=0.8',
       'Accept-Language': 'tr-TR,tr;q=0.9',
       'Referer': SITE_AYARLARI.PRIMARY_DOMAIN + '/'
+    }).then(function (html) {
+      if (!html) return attempt(t + 1);
+      var found = findStreamUrl(html);
+      if (!found) {
+        var unpacked = unpackPacked(html);
+        if (unpacked) found = findStreamUrl(unpacked);
+      }
+      if (found) {
+        var ref = /vidmoly\./.test(tries[t]) ? 'https://vidmoly.biz/'
+          : ((tries[t].match(/^https?:\/\/[^\/]+/) || [''])[0] + '/');
+        found.headers = { 'User-Agent': ANDROID_UA, 'Referer': ref };
+        return found;
+      }
+      return attempt(t + 1);
     });
-    if (!html) continue;
-    var found = findStreamUrl(html);
-    if (!found) {
-      var unpacked = unpackPacked(html);
-      if (unpacked) found = findStreamUrl(unpacked);
-    }
-    if (found) {
-      var ref = /vidmoly\./.test(tries[t]) ? 'https://vidmoly.biz/'
-        : ((tries[t].match(/^https?:\/\/[^\/]+/) || [''])[0] + '/');
-      found.headers = { 'User-Agent': ANDROID_UA, 'Referer': ref };
-      return found;
-    }
   }
-  return null;
+  return attempt(0);
 }
 
-async function resolveOk(embedUrl) {
+function resolveOk(embedUrl) {
   var clean = embedUrl.split('?')[0];
-  var html = await getText(clean, {
+  return getText(clean, {
     'User-Agent': ANDROID_UA,
     'Referer': SITE_AYARLARI.PRIMARY_DOMAIN + '/'
-  });
-  if (!html) return null;
-  var m = html.match(/data-options="([^"]+)"/);
-  if (!m) return null;
-  try {
-    var opts = JSON.parse(decodeHtml(m[1]));
-    var meta = opts.flashvars && opts.flashvars.metadata;
-    if (typeof meta === 'string') meta = JSON.parse(meta);
-    if (!meta) return null;
+  }).then(function (html) {
+    if (!html) return null;
+    var m = html.match(/data-options="([^"]+)"/);
+    if (!m) return null;
+    try {
+      var opts = JSON.parse(decodeHtml(m[1]));
+      var meta = opts.flashvars && opts.flashvars.metadata;
+      if (typeof meta === 'string') meta = JSON.parse(meta);
+      if (!meta) return null;
 
-    var hls = meta.hlsManifestUrl || meta.ondemandHls || meta.hlsMasterPlaylistUrl;
-    if (hls) return { url: hls, type: 'hls', quality: 'Auto' };
+      var hls = meta.hlsManifestUrl || meta.ondemandHls || meta.hlsMasterPlaylistUrl;
+      if (hls) return { url: hls, type: 'hls', quality: 'Auto' };
 
-    var order = ['full', 'hd', 'sd', 'low', 'lowest', 'mobile'];
-    var q = { full: '1080p', hd: '720p', sd: '480p', low: '360p', lowest: '240p', mobile: '144p' };
-    var vids = meta.videos || [];
-    for (var i = 0; i < order.length; i++) {
-      for (var j = 0; j < vids.length; j++) {
-        if (vids[j].name === order[i] && vids[j].url) {
-          return { url: vids[j].url, type: 'mp4', quality: q[order[i]] };
+      var order = ['full', 'hd', 'sd', 'low', 'lowest', 'mobile'];
+      var q = { full: '1080p', hd: '720p', sd: '480p', low: '360p', lowest: '240p', mobile: '144p' };
+      var vids = meta.videos || [];
+      for (var i = 0; i < order.length; i++) {
+        for (var j = 0; j < vids.length; j++) {
+          if (vids[j].name === order[i] && vids[j].url) {
+            return { url: vids[j].url, type: 'mp4', quality: q[order[i]] };
+          }
         }
       }
-    }
-  } catch (e) {}
-  return null;
+    } catch (e) {}
+    return null;
+  });
 }
 
-async function resolveSource(url) {
+function resolveSource(url) {
   if (/ok\.ru/.test(url)) return resolveOk(url);
   return resolveVidmoly(url);
 }
 
 // ============================================================
-// GAKİŞ GETİRME ANA FONKSİYONU
+//  NUVIO GİRİŞ NOKTASI: getStreams(tmdbId, mediaType, season, episode)
 // ============================================================
 
-async function getStreams(tmdbId, mediaType, season, episode) {
-  try {
-    if (mediaType !== 'movie') return [];
+function makeStream(label, r, fallbackReferer) {
+  return {
+    name: SITE_AYARLARI.EKLENTI_ADI,
+    title: '⌜ ' + SITE_AYARLARI.EKLENTI_ADI.toUpperCase() + ' ⌟ | ' + label,
+    url: r.url,
+    quality: r.quality || 'Auto',
+    type: r.type,
+    headers: r.headers || { 'User-Agent': ANDROID_UA, 'Referer': fallbackReferer },
+    provider: PROVIDER_ID
+  };
+}
 
-    var tmdbRes = await withTimeout(fetch(
-      'https://api.themoviedb.org/3/movie/' + tmdbId + '?language=tr-TR&api_key=' + TMDB_KEY
-    ), 8000);
-    var info = await tmdbRes.json();
-    var title = info.title;
-    var origTitle = info.original_title;
-    var year = (info.release_date || '').slice(0, 4);
-    if (!title || !year) return [];
+function getStreams(tmdbId, mediaType, season, episode) {
+  if (mediaType !== 'movie') return Promise.resolve([]);
 
-    var found = await findMoviePage(title, origTitle, year);
-    if (!found) return [];
+  return withTimeout(fetch(
+    'https://api.themoviedb.org/3/movie/' + tmdbId + '?language=tr-TR&api_key=' + TMDB_KEY
+  ), 8000)
+    .then(function (res) { return res.json(); })
+    .then(function (info) {
+      var title = info.title;
+      var origTitle = info.original_title;
+      var year = (info.release_date || '').slice(0, 4);
+      if (!title || !year) return [];
 
-    var streams = [];
+      return findMoviePage(title, origTitle, year).then(function (found) {
+        if (!found) return [];
 
-    // 1. Klasik Butonlu Kaynakları Çöz (Vidmoly, OK.ru vb.)
-    var sources = extractSources(found.html);
-    var resolved = await Promise.all(sources.map(function (s) { return resolveSource(s.url); }));
-    for (var i = 0; i < sources.length; i++) {
-      var r = resolved[i];
-      if (!r) continue;
-      streams.push({
-        name: SITE_AYARLARI.EKLENTI_ADI,
-        title: '⌜ ' + SITE_AYARLARI.EKLENTI_ADI.toUpperCase() + ' ⌟ | ' + sources[i].label,
-        url: r.url,
-        quality: r.quality,
-        type: r.type,
-        headers: r.headers || { 'User-Agent': ANDROID_UA, 'Referer': 'https://ok.ru/' }
-      });
-    }
+        var sources = extractSources(found.html);
+        var atomToken = getAtomTokenFromHtml(found.html);
 
-    // 2. SCX / Atom (RapidVid) Gizli JSON Token Kaynağını Çöz
-    var atomToken = getAtomTokenFromHtml(found.html);
-    if (atomToken) {
-      var atomStream = await resolveAtom(atomToken, found.url);
-      if (atomStream) {
-        streams.push({
-          name: SITE_AYARLARI.EKLENTI_ADI,
-          title: '⌜ ' + SITE_AYARLARI.EKLENTI_ADI.toUpperCase() + ' ⌟ | RapidVid (Atom)',
-          url: atomStream.url,
-          quality: atomStream.quality || 'Auto',
-          type: atomStream.type || 'hls',
-          headers: atomStream.headers || { 'User-Agent': ANDROID_UA, 'Referer': found.url }
+        var sourceJobs = sources.map(function (s) {
+          return resolveSource(s.url).catch(function () { return null; });
         });
-      }
-    }
+        var atomJob = atomToken
+          ? resolveAtom(atomToken, found.url).catch(function () { return null; })
+          : Promise.resolve(null);
 
-    return streams;
-  } catch (e) {
-    return [];
-  }
+        return Promise.all([Promise.all(sourceJobs), atomJob]).then(function (out) {
+          var resolved = out[0], atom = out[1], streams = [];
+          for (var i = 0; i < sources.length; i++) {
+            if (resolved[i]) streams.push(makeStream(sources[i].label, resolved[i], 'https://ok.ru/'));
+          }
+          if (atom) streams.push(makeStream('RapidVid (Atom)', atom, found.url));
+          return streams;
+        });
+      });
+    })
+    .catch(function () { return []; });
 }
 
 if (typeof module !== 'undefined' && module.exports) {
