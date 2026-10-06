@@ -1,15 +1,15 @@
 {
-  "name": "FullHD Filmizlesene",
-  "version": "1.0.1",
+  "name": "filmabisi2",
+  "version": "1.0.0",
   "scrapers": [
     {
-      "id": "fullhdfilmizlesene",
-      "name": "FullHD Filmizlesene",
+      "id": "filmabisi2",
+      "name": "filmabisi2",
       "description": "Türkçe dublaj/altyazılı film kaynağı",
-      "version": "1.0.1",
+      "version": "1.0.0",
       "author": "custom",
       "supportedTypes": ["movie"],
-      "filename": "fullhdfilmizlesene.js",
+      "filename": "filmabisi2.js",
       "enabled": true,
       "hasSettings": false,
       "formats": ["m3u8", "mp4"],
