@@ -1,15 +1,14 @@
 {
-  "name": "Cemile Nuvio Deposu",
-  "version": "1.0.1",
+  "name": "Mail.ru Video",
+  "version": "1.0.0",
   "scrapers": [
     {
-      "id": "hdfilmcehennemi",
-      "name": "Hdfilmcehennemi",
-      "description": "Güncel film ve dizi kaynakları",
-      "version": "1.0.1",
-      "author": "Cemile",
+      "id": "mailru",
+      "name": "Mail.ru Video",
+      "description": "video.mail.ru kaynaklı akışlar",
+      "version": "1.0.0",
+      "filename": "providers/mailru.js",
       "supportedTypes": ["movie", "tv"],
-      "filename": "providers/hdfilmcehennemi.js",
       "enabled": true
     }
   ]
