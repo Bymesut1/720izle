@@ -1,5 +1,5 @@
 const BASE_URL = 'https://www.hdfilmcehennemi.nl';
-const TMDB_API_KEY = 'BURAYA_TMDB_ANAHTARIN';
+const TMDB_API_KEY = '000316508321ce461cf81e7c6815eec7';
 
 const HEADERS = {
   'User-Agent':
