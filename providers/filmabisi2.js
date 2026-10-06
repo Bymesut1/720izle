@@ -222,6 +222,23 @@ function nameMatches(siteName, wantList) {
   return false;
 }
 
+var STOP = { the: 1, and: 1, ve: 1, bir: 1, film: 1, izle: 1, of: 1, an: 1 };
+function toks(x) {
+  return asciiLower(x).split(/[^a-z0-9]+/).filter(function (t) { return t.length >= 2 && !STOP[t]; });
+}
+// Çok kelimeli başlıklarda kelimelerin ≥%75'i her iki yönde tutuyorsa (yalnızca yıl birebir aynıyken kullanılır)
+function tokenMatch(siteName, wants) {
+  var st = toks(siteName);
+  if (st.length < 2) return false;
+  for (var i = 0; i < wants.length; i++) {
+    var wt = toks(wants[i]);
+    if (wt.length < 2) continue;
+    var hit = wt.filter(function (t) { return st.indexOf(t) > -1; }).length;
+    if (hit / wt.length >= 0.75 && hit / st.length >= 0.75) return true;
+  }
+  return false;
+}
+
 // SIKI doğrulama: yıl (±1) + başlık eşleşmesi. Eşleşmezse sayfa kullanılmaz.
 function isRightMovie(html, title, origTitle, year) {
   var info = pageInfo(html);
@@ -230,6 +247,7 @@ function isRightMovie(html, title, origTitle, year) {
   var want = [norm(title), norm(origTitle)].filter(function (n) { return n && n.length >= 2; });
   for (var i = 0; i < info.names.length; i++) {
     if (nameMatches(info.names[i], want)) return true;
+    if (info.year === y && tokenMatch(info.names[i], [title, origTitle])) return true;
   }
   return false;
 }
@@ -263,7 +281,9 @@ function findMoviePage(title, origTitle, year, imdbId) {
   var paths = [];
   function add(p) { if (p && paths.indexOf(p) === -1) paths.push(p); }
 
-  var queries = [imdbId, origTitle, title].filter(function (q, i, a) { return q && a.indexOf(q) === i; });
+  function simple(x) { return String(x || '').replace(/[:\-–—]/g, ' ').replace(/\s+/g, ' ').trim(); }
+  var queries = [imdbId, origTitle, title, simple(origTitle), simple(title)]
+    .filter(function (q, i, a) { return q && a.indexOf(q) === i; });
 
   return Promise.all(queries.map(function (q, qi) {
     return getText(SITE_AYARLARI.PRIMARY_DOMAIN + SITE_AYARLARI.ARAMA_YOLU + encodeURIComponent(q), null, 'S' + (qi + 1));
@@ -275,11 +295,18 @@ function findMoviePage(title, origTitle, year, imdbId) {
     });
     log('arama: ' + cards.length + ' kart, ' + loose.length + ' link');
     dbg.push('kart ' + cards.length + ' link ' + loose.length);
+    var shownY = 0, seenY = {};
+    cards.forEach(function (c) {
+      if (shownY >= 5 || seenY[c.path] || !c.year || Math.abs(c.year - y) > 1) return;
+      seenY[c.path] = 1; shownY++;
+      dbgR.push('Y' + c.year + ' ' + c.title + (c.orig ? ' / ' + c.orig : ''));
+    });
 
     function yearOk(c) { return c.year && Math.abs(c.year - y) <= 1; }
     function titleOk(c) {
       var want = [nTitle, nOrig].filter(function (n) { return n && n.length >= 2; });
-      return nameMatches(c.title, want) || nameMatches(c.orig, want);
+      return nameMatches(c.title, want) || nameMatches(c.orig, want) ||
+             (c.year === y && (tokenMatch(c.title, [title, origTitle]) || tokenMatch(c.orig, [title, origTitle])));
     }
 
     cards.filter(function (c) { return yearOk(c) && titleOk(c); }).forEach(function (c) { add(c.path); });
@@ -532,7 +559,7 @@ function resolveSource(url, pageUrl) {
 
 function makeStream(label, r) {
   return {
-    name: SITE_AYARLARI.EKLENTI_ADI,
+    name: SITE_AYARLARI.EKLENTI_ADI + ' | ' + label,
     title: label,
     url: r.url,
     quality: r.quality || 'Auto',
