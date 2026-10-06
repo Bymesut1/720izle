@@ -1,15 +1,22 @@
 {
-  "name": "Mail.ru Video",
+  "id": "720izle.nuvio.plugins",
+  "name": "720izle Plugin",
+  "logo": "https://www.google.com/s2/favicons?domain=720izle.net&sz=128",
   "version": "1.0.0",
+  "author": "Bymesut",
   "scrapers": [
     {
-      "id": "mailru",
-      "name": "Mail.ru Video",
-      "description": "video.mail.ru kaynaklı akışlar",
+      "id": "720izle",
+      "name": "720izle",
+      "logo": "https://www.google.com/s2/favicons?domain=720izle.net&sz=128",
       "version": "1.0.0",
-      "filename": "providers/mailru.js",
-      "supportedTypes": ["movie", "tv"],
-      "enabled": true
+      "filename": "providers/720izle.js",
+      "supportedTypes": [
+        "movie"
+      ],
+      "contentLanguage": [
+        "tr"
+      ]
     }
   ]
 }
