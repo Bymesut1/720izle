@@ -128,12 +128,9 @@ function decodeSecret(input) {
   return bytesToStr(b64ToBytes(inner));
 }
 
-// eval(function(p,a,c,k,e,d)...) açıcı
-function unpackPacked(src) {
-  var m = String(src || '').match(/eval\(function\(p,a,c,k,e,d\)\{[\s\S]*?\}\('([\s\S]*?)',(\d+),(\d+),'([\s\S]*?)'\.split\('\|'\)/);
-  if (!m) return '';
-  var p = m[1].replace(/\\'/g, "'").replace(/\\\\/g, '\\');
-  var a = parseInt(m[2], 10), c = parseInt(m[3], 10), k = m[4].split('|');
+// Dean Edwards packer açıcı: sayfada birden çok olabilir, iç içe de olabilir
+function unpackWith(p, a, c, k) {
+  p = p.replace(/\\'/g, "'").replace(/\\\\/g, '\\');
   function enc(n) {
     return (n < a ? '' : enc(Math.floor(n / a))) +
            ((n = n % a) > 35 ? String.fromCharCode(n + 29) : n.toString(36));
@@ -144,14 +141,21 @@ function unpackPacked(src) {
 }
 
 function unpackAll(text) {
-  var list = [String(text || '')], cur = list[0];
-  for (var i = 0; i < 3; i++) {
-    var u = unpackPacked(cur);
-    if (!u) break;
-    list.push(u);
-    cur = u;
+  var first = String(text || '');
+  var out = [first], queue = [first];
+  for (var depth = 0; depth < 4 && queue.length; depth++) {
+    var next = [];
+    for (var qi = 0; qi < queue.length; qi++) {
+      var re = /\}\('((?:[^'\\]|\\[\s\S])*)',\s*(\d+)\s*,\s*(\d+)\s*,\s*'((?:[^'\\]|\\[\s\S])*)'\s*\.split\('\|'\)/g, m;
+      while ((m = re.exec(queue[qi])) !== null) {
+        var u = '';
+        try { u = unpackWith(m[1], parseInt(m[2], 10), parseInt(m[3], 10), m[4].split('|')); } catch (e) {}
+        if (u && out.indexOf(u) === -1) { out.push(u); next.push(u); }
+      }
+    }
+    queue = next;
   }
-  return list;
+  return out;
 }
 
 var BAD_EXT = /\.(vtt|srt|jpg|jpeg|png|webp|gif|css|js|ico|svg)(\?|$)/i;
@@ -340,6 +344,56 @@ function extractLegacySources(html) {
 
 // ---------------- Çözücüler ----------------
 
+
+function firstHttp(r) {
+  var f = findStreamUrl(r);
+  if (f) return f;
+  var urls = String(r).match(/https?:\/\/[^\s"'<>\\]+/g) || [];
+  for (var i = 0; i < urls.length; i++) {
+    if (!BAD_EXT.test(urls[i]) && !/rapidvid|google|gstatic|jwplayer/i.test(urls[i])) {
+      return { url: urls[i], type: /\.mp4/i.test(urls[i]) ? 'mp4' : 'hls', quality: 'Auto' };
+    }
+  }
+  return null;
+}
+
+// Metinlerdeki uzun kodlanmış dizeleri bilinen dönüşümlerle çözmeyi dene
+function bruteFind(texts) {
+  var seen = {};
+  for (var ti = 0; ti < texts.length; ti++) {
+    var t = String(texts[ti]).replace(/\\\\/g, '\\');
+    var re = /["'(]([A-Za-z0-9+\/=_\-\\]{40,})["')]/g, m;
+    while ((m = re.exec(t)) !== null) {
+      var str = m[1];
+      if (seen[str]) continue;
+      seen[str] = 1;
+      var tries = [
+        function () { return hexUnescape(str); },
+        function () { return bytesToStr(b64ToBytes(str)); },
+        function () { return bytesToStr(b64ToBytes(rot13(str))); },
+        function () { return bytesToStr(b64ToBytes(str.split('').reverse().join(''))); },
+        function () { return decodeSecret(str); },
+        function () { return bytesToStr(b64ToBytes(bytesToStr(b64ToBytes(str)))); }
+      ];
+      for (var k = 0; k < tries.length; k++) {
+        var r = '';
+        try { r = tries[k](); } catch (e) {}
+        if (r && /https?:\/\//.test(r)) {
+          var f = firstHttp(r);
+          if (f) return f;
+        }
+      }
+    }
+  }
+  return null;
+}
+
+function ctx(text, needle, n) {
+  var i = text.indexOf(needle);
+  if (i < 0) return '';
+  return text.slice(Math.max(0, i - 10), i + n).replace(/\s+/g, ' ');
+}
+
 function resolveRapid(embedUrl, pageUrl) {
   var origin = originOf(embedUrl);
   return getText(embedUrl, {
@@ -375,7 +429,18 @@ function resolveRapid(embedUrl, pageUrl) {
 
       found = findStreamUrl(t);
     }
-    if (!found) { stage = 'rapidvid link çıkmadı (' + html.length + ' bayt)'; return null; }
+    if (!found) found = bruteFind(texts);
+    if (!found) {
+      stage = 'rapidvid link çıkmadı (' + html.length + ' bayt)';
+      var all = texts.join('\n');
+      dbg.push('R ev' + (texts.length - 1) + ' av' + (all.indexOf('av(') > -1 ? 1 : 0) + ' file' + (all.indexOf('file') > -1 ? 1 : 0) + ' atob' + (all.indexOf('atob') > -1 ? 1 : 0) + ' hex' + (all.indexOf('\\x') > -1 ? 1 : 0));
+      var c1 = ctx(all, 'file', 90), c2 = ctx(all, 'av(', 90), c3 = ctx(all, 'atob', 90);
+      if (c1) dbg.push('Rfile ' + c1);
+      if (c2) dbg.push('Rav ' + c2);
+      if (c3) dbg.push('Ratob ' + c3);
+      if (!c1 && !c2 && !c3) dbg.push('Rbas ' + String(texts[texts.length - 1]).slice(0, 120).replace(/\s+/g, ' '));
+      return null;
+    }
     found.headers = { 'User-Agent': ANDROID_UA, 'Referer': origin + '/' };
     return found;
   });
