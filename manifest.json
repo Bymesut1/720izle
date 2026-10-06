@@ -1,16 +1,16 @@
 {
-  "id": "720izle.nuvio.plugins",
-  "name": "720izle Plugin",
-  "logo": "https://www.google.com/s2/favicons?domain=720izle.net&sz=128",
+  "id": "fullhdfilmizlesene.nuvio.plugins",
+  "name": "FullHDFilmizlesene Plugin",
+  "logo": "https://www.google.com/s2/favicons?domain=fullhdfilmizlesene.now&sz=128",
   "version": "1.0.0",
   "author": "Bymesut",
   "scrapers": [
     {
-      "id": "720izle",
-      "name": "720izle",
-      "logo": "https://www.google.com/s2/favicons?domain=720izle.net&sz=128",
+      "id": "fullhdfilmizlesene",
+      "name": "FullHDFilmizlesene",
+      "logo": "https://www.google.com/s2/favicons?domain=fullhdfilmizlesene.now&sz=128",
       "version": "1.0.0",
-      "filename": "providers/720izle.js",
+      "filename": "providers/fullhdfilmizlesene.js",
       "supportedTypes": [
         "movie"
       ],
