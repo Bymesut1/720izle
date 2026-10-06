@@ -1,6 +1,6 @@
 // Nuvio local scraper: video.mail.ru
 // Not: TMDB_KEY alanına kendi TMDB API anahtarını yaz.
-var TMDB_KEY = 'BURAYA_TMDB_API_KEY';
+var TMDB_KEY = '000316508321ce461cf81e7c6815eec7';
 var UA = 'Mozilla/5.0 (Linux; Android 13) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0 Mobile Safari/537.36';
 
 function norm(u) {
