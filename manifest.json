@@ -1,1 +1,16 @@
-
+{
+  "name": "Cemile Nuvio Deposu",
+  "version": "1.0.1",
+  "scrapers": [
+    {
+      "id": "hdfilmcehennemi",
+      "name": "Hdfilmcehennemi",
+      "description": "Güncel film ve dizi kaynakları",
+      "version": "1.0.1",
+      "author": "Cemile",
+      "supportedTypes": ["movie", "tv"],
+      "filename": "providers/hdfilmcehennemi.js",
+      "enabled": true
+    }
+  ]
+}
