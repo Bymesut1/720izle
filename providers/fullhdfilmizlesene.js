@@ -1,32 +1,33 @@
 // ============================================================
-//  DÜZENLEYECEĞİNİZ ALAN
+//  DÜZENLEYECEĞİNİZ ALAN (SADECE TIRNAK İÇLERİNİ SİLİP DOLDURUN)
+//  DİKKAT: Tırnak işaretlerinin '...' kendisini KESİNLİKLE SİLMEYİN!
 // ============================================================
 
 var SITE_AYARLARI = {
   // 1. Sitenin Ana Adresi
-  PRIMARY_DOMAIN: 'https://www.fullhdfilmizlesene.now',
+  PRIMARY_DOMAIN: 'https://www.fullhdfilmizlesene.pw',
 
   // 2. Arama Adresi Eki (Arama yapınca adreste çıkan ek)
-  ARAMA_YOLU: '/arama/',
+  ARAMA_YOLU: '/?s=',
 
-  // 3. Film Link Eki (Filme tıklayınca adreste ne yazıyorsa)
+  // 3. Film Link Eki (Filme tıklayınca adreste ne yazıyorsa, örn: /film/ veya /izle/)
   FILM_LINK_EKI: '/film/',
 
   // 4. Arama Sonucundaki Film Kartının HTML Sınıfı/Etiketi
-  ARAMA_KART_ETIKETI: '<li class="film">',
+  ARAMA_KART_ETIKETI: '<article class="card">',
 
   // 5. Film Detay Sayfasındaki Başlığın Class (Sınıf) Adı
-  HERO_TITLE_CLASS: 'film-title',
+  HERO_TITLE_CLASS: 'hero-title',
 
-  // 6. Film Detay Sayfasındaki Alt Başlığın Class (Sınıf) Adı
-  HERO_SUB_CLASS: 'kt',
+  // 6. Film Detay Sayfasındaki Yıl / Alt Başlığın Class (Sınıf) Adı
+  HERO_SUB_CLASS: 'hero-sub',
 
   // 7. Eklentinin Menüde Görünecek Adı
-  EKLENTI_ADI: 'FullHDFilmizlesene'
+  EKLENTI_ADI: 'FullHD Filmizlesene'
 };
 
 // ============================================================
-//  AŞAĞIDAKİ KODLAR ÇALIŞMA MANTIĞINI SAĞLAR
+//  AŞAĞIDAKİ KODLARA DOKUNMANIZA GEREK YOKTUR
 // ============================================================
 
 var TMDB_KEY = '000316508321ce461cf81e7c6815eec7';
@@ -50,14 +51,6 @@ function withTimeout(promise, ms) {
 function decodeHtml(s) {
   return String(s || '').replace(/&quot;/g, '"').replace(/&#0?39;/g, "'")
     .replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&amp;/g, '&');
-}
-
-function safeAtob(b64) {
-  try {
-    if (typeof atob === 'function') return atob(b64);
-    if (typeof Buffer !== 'undefined') return Buffer.from(b64, 'base64').toString('binary');
-  } catch (e) {}
-  return '';
 }
 
 function norm(s) {
@@ -90,11 +83,10 @@ function isRightMovie(html, title, origTitle, year) {
   var y = parseInt(year, 10);
   var yearOk = false;
   for (var d = -1; d <= 1; d++) {
-    if (html.indexOf(String(y + d)) > -1) yearOk = true;
+    if (sub.indexOf('(' + (y + d) + ')') > -1) yearOk = true;
   }
   var titleOk = (origTitle && norm(sub).indexOf(norm(origTitle)) > -1) ||
-                (title && norm(h1) === norm(title)) ||
-                (origTitle && norm(h1).indexOf(norm(origTitle)) > -1);
+                (title && norm(h1) === norm(title));
   return yearOk && titleOk;
 }
 
@@ -160,18 +152,6 @@ async function findMoviePage(title, origTitle, year) {
 
 function extractSources(html) {
   var list = [];
-
-  // 1. FullHDFilmizlesene Base64 (data-code) Oynatıcı Çözücü
-  var frgMatch = html.match(/class="frg"[^>]*data-code="([^"]+)"/);
-  if (frgMatch && frgMatch[1]) {
-    var decoded = safeAtob(frgMatch[1]);
-    var srcMatch = decoded.match(/src=["']([^"']+)["']/);
-    if (srcMatch && srcMatch[1]) {
-      list.push({ url: decodeHtml(srcMatch[1]), label: 'Ana Kaynak' });
-    }
-  }
-
-  // 2. Standart kaynak arama
   var re = /loadSource\('([^']+)'\s*,\s*this\)[^>]*>([\s\S]*?)<\/button>/g, m;
   while ((m = re.exec(html)) !== null) {
     var url = decodeHtml(m[1]);
@@ -179,12 +159,10 @@ function extractSources(html) {
     if (/youtube\.com|youtu\.be/.test(url) || /fragman/i.test(label)) continue;
     list.push({ url: url, label: label });
   }
-
   if (!list.length) {
     var d = html.match(/data-src="([^"]+)"/);
     if (d && /ok\.ru/.test(d[1])) list.push({ url: decodeHtml(d[1]), label: 'Varsayılan' });
   }
-
   return list;
 }
 
@@ -204,6 +182,13 @@ function unpackPacked(src) {
 
 function findStreamUrl(text) {
   text = String(text || '').replace(/\\\//g, '/').replace(/&amp;/g, '&');
+
+  // Static, CDN, .shop ve .m3u8 adreslerini kapsayan dinamik arama
+  var shopMatch = text.match(/(https?:\/\/[^\s"'<>]+?\.(?:static\d+|cdnimgs\d+|shop)[^\s"'<>]*)/i);
+  if (shopMatch) {
+    return { url: shopMatch[1], type: 'hls', quality: 'Auto' };
+  }
+
   var all = text.match(/https?:\/\/[^"'\s\\<>]+\.m3u8[^"'\s\\<>]*/g) || [];
   if (all.length) {
     var pick = all[0];
@@ -212,10 +197,83 @@ function findStreamUrl(text) {
     }
     return { url: pick, type: 'hls', quality: 'Auto' };
   }
+
   var f = text.match(/file\s*:\s*["']([^"']+\.mp4[^"']*)["']/);
   if (f) return { url: f[1], type: 'mp4', quality: 'Auto' };
   return null;
 }
+
+// ============================================================
+// ATOM / RAPIDVID (SCX JSON) ÇÖZÜCÜ ENTEGRASYONU
+// ============================================================
+
+function getAtomTokenFromHtml(html) {
+  try {
+    var match = html.match(/var\s+scx\s*=\s*(\{[\s\S]*?\});/);
+    if (!match || !match[1]) return null;
+    var scxObj = JSON.parse(match[1]);
+    if (scxObj && scxObj.atom && scxObj.atom.sx && scxObj.atom.sx.t && scxObj.atom.sx.t[0]) {
+      return scxObj.atom.sx.t[0]; // "nUE0pUZ6Yl9lLK..." token verisi
+    }
+  } catch (e) {}
+  return null;
+}
+
+async function resolveAtom(token, pageUrl) {
+  if (!token) return null;
+  var endpoint = SITE_AYARLARI.PRIMARY_DOMAIN + '/ajax/player';
+  var commonHeaders = {
+    'User-Agent': ANDROID_UA,
+    'Referer': pageUrl,
+    'X-Requested-With': 'XMLHttpRequest'
+  };
+
+  var rawRes = '';
+
+  // 1. POST İsteği Dene
+  try {
+    var postRes = await withTimeout(fetch(endpoint, {
+      method: 'POST',
+      headers: Object.assign({}, commonHeaders, {
+        'Content-Type': 'application/x-www-form-urlencoded; charset=UTF-8'
+      }),
+      body: 'token=' + encodeURIComponent(token) + '&id=' + encodeURIComponent(token)
+    }), 8000);
+    if (postRes.ok) rawRes = await postRes.text();
+  } catch (e) {}
+
+  // 2. POST Başarısız/Boşsa GET İsteği Dene
+  if (!rawRes || rawRes.length < 20) {
+    try {
+      var getUrl = endpoint + '?token=' + encodeURIComponent(token) + '&id=' + encodeURIComponent(token);
+      var getRes = await withTimeout(fetch(getUrl, { headers: commonHeaders }), 8000);
+      if (getRes.ok) rawRes = await getRes.text();
+    } catch (e) {}
+  }
+
+  if (!rawRes) return null;
+
+  // Yanıttan Akış Bağlantısını Çıkar
+  var stream = findStreamUrl(rawRes);
+  if (!stream) {
+    var unpacked = unpackPacked(rawRes);
+    if (unpacked) stream = findStreamUrl(unpacked);
+  }
+
+  if (stream) {
+    stream.headers = {
+      'User-Agent': ANDROID_UA,
+      'Referer': pageUrl
+    };
+    return stream;
+  }
+
+  return null;
+}
+
+// ============================================================
+// DİĞER SAĞLAYICI ÇÖZÜCÜLERİ
+// ============================================================
 
 async function resolveVidmoly(embedUrl) {
   var clean = embedUrl.split('?')[0];
@@ -244,11 +302,6 @@ async function resolveVidmoly(embedUrl) {
     }
   }
   return null;
-}
-
-async function resolveSource(url) {
-  if (/ok\.ru/.test(url)) return resolveOk(url);
-  return resolveVidmoly(url);
 }
 
 async function resolveOk(embedUrl) {
@@ -283,6 +336,15 @@ async function resolveOk(embedUrl) {
   return null;
 }
 
+async function resolveSource(url) {
+  if (/ok\.ru/.test(url)) return resolveOk(url);
+  return resolveVidmoly(url);
+}
+
+// ============================================================
+// GAKİŞ GETİRME ANA FONKSİYONU
+// ============================================================
+
 async function getStreams(tmdbId, mediaType, season, episode) {
   try {
     if (mediaType !== 'movie') return [];
@@ -299,9 +361,11 @@ async function getStreams(tmdbId, mediaType, season, episode) {
     var found = await findMoviePage(title, origTitle, year);
     if (!found) return [];
 
+    var streams = [];
+
+    // 1. Klasik Butonlu Kaynakları Çöz (Vidmoly, OK.ru vb.)
     var sources = extractSources(found.html);
     var resolved = await Promise.all(sources.map(function (s) { return resolveSource(s.url); }));
-    var streams = [];
     for (var i = 0; i < sources.length; i++) {
       var r = resolved[i];
       if (!r) continue;
@@ -314,6 +378,23 @@ async function getStreams(tmdbId, mediaType, season, episode) {
         headers: r.headers || { 'User-Agent': ANDROID_UA, 'Referer': 'https://ok.ru/' }
       });
     }
+
+    // 2. SCX / Atom (RapidVid) Gizli JSON Token Kaynağını Çöz
+    var atomToken = getAtomTokenFromHtml(found.html);
+    if (atomToken) {
+      var atomStream = await resolveAtom(atomToken, found.url);
+      if (atomStream) {
+        streams.push({
+          name: SITE_AYARLARI.EKLENTI_ADI,
+          title: '⌜ ' + SITE_AYARLARI.EKLENTI_ADI.toUpperCase() + ' ⌟ | RapidVid (Atom)',
+          url: atomStream.url,
+          quality: atomStream.quality || 'Auto',
+          type: atomStream.type || 'hls',
+          headers: atomStream.headers || { 'User-Agent': ANDROID_UA, 'Referer': found.url }
+        });
+      }
+    }
+
     return streams;
   } catch (e) {
     return [];
