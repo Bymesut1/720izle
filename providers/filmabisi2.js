@@ -342,43 +342,136 @@ function extractLegacySources(html) {
 
 // ---------------- Çözücüler ----------------
 
+
+// ---- RapidVid yedek çözücü: anahtar/format değişse de dener ----
+function revStr(s) { return String(s).split('').reverse().join(''); }
+function hasHttp(x) { return /https?:\/\/[A-Za-z0-9]/.test(x); }
+
+function tryDecodeString(str) {
+  var variants = [str, revStr(str), rot13(str), revStr(rot13(str))];
+  for (var vi = 0; vi < variants.length; vi++) {
+    var bytes = b64ToBytes(variants[vi]);
+    if (bytes.length < 12) continue;
+    var plain = bytesToStr(bytes);
+    if (hasHttp(plain)) return plain;
+    var inner0 = bytesToStr(b64ToBytes(plain));
+    if (hasHttp(inner0)) return inner0;
+    for (var a = 0; a <= 5; a++) for (var b = 0; b <= 5; b++) for (var c = 0; c <= 5; c++) {
+      if (!a && !b && !c) continue;
+      var off = [a, b, c], out = [];
+      for (var i = 0; i < bytes.length; i++) out.push((bytes[i] - off[i % 3]) & 255);
+      var s2 = bytesToStr(out);
+      if (hasHttp(s2)) return s2;
+      if (/^[A-Za-z0-9+\/=_\-]+$/.test(s2)) {
+        var s3 = bytesToStr(b64ToBytes(s2));
+        if (hasHttp(s3)) return s3;
+      }
+    }
+  }
+  return '';
+}
+
+function bruteFindStream(texts) {
+  var cands = [];
+  texts.forEach(function (t) {
+    var re = /["']([A-Za-z0-9+\/=_\-]{30,6000})["']/g, m;
+    while ((m = re.exec(t)) !== null) {
+      if (cands.indexOf(m[1]) === -1) cands.push(m[1]);
+    }
+  });
+  cands.sort(function (x, y) { return y.length - x.length; });
+  cands = cands.slice(0, 8);
+  dbg.push('RV aday ' + cands.length);
+  for (var i = 0; i < cands.length; i++) {
+    var d = tryDecodeString(cands[i]);
+    if (d) {
+      var f = findStreamUrl(d);
+      if (f) return f;
+      var u = (d.match(/https?:\/\/[^\s"'<>\\]+/) || [])[0];
+      if (u && !BAD_EXT.test(u)) return { url: u, type: /\.mp4/i.test(u) ? 'mp4' : 'hls', quality: 'Auto' };
+    }
+  }
+  return null;
+}
+
+function rvDiag(html, texts) {
+  var t = texts[texts.length - 1];
+  var i = t.search(/av\s*\(/);
+  dbg.push('RV len=' + html.length + ' paket=' + (texts.length - 1) + ' av=' + (i > -1) +
+    ' file=' + /file/.test(t) + ' m3u8=' + /m3u8/.test(t) + ' atob=' + /atob/.test(t));
+  if (i > -1) dbg.push('RV av: ' + t.substr(Math.max(0, i - 30), 140));
+  var si = html.search(/<script/i);
+  dbg.push('RV bas: ' + html.substr(0, 90).replace(/\s+/g, ' '));
+  var ss = html.lastIndexOf('<script');
+  if (ss > -1) dbg.push('RV son: ' + html.substr(ss, 160).replace(/\s+/g, ' '));
+}
+
+function extractRapid(html) {
+  var texts = unpackAll(html), found = null;
+
+  // Düz <video><source src="..."> / <video src="..."> (uzantısız link de olabilir)
+  var sm = html.match(/<(?:source|video)[^>]*\ssrc=["'](https?:\/\/[^"']+)["']/i);
+  if (sm && !BAD_EXT.test(sm[1])) {
+    return { found: { url: decodeHtml(sm[1]), type: /\.mp4(\?|$)/i.test(sm[1]) ? 'mp4' : 'hls', quality: 'Auto' }, texts: texts };
+  }
+
+  for (var i = 0; i < texts.length && !found; i++) {
+    var t = texts[i];
+
+    var av = t.match(/av\(\s*['"]([^'"]+)['"]\s*\)/);
+    if (av) {
+      try {
+        var d = decodeSecret(av[1]);
+        found = findStreamUrl(d) || (/^https?:\/\/\S+$/.test(d) ? { url: d, type: 'hls', quality: 'Auto' } : null);
+      } catch (e) {}
+    }
+    if (found) break;
+
+    var re = /"?file"?\s*:\s*"([^"]+)"/g, m;
+    while ((m = re.exec(t)) !== null) {
+      var v = hexUnescape(m[1]);
+      if (/^https?:\/\//.test(v) && !BAD_EXT.test(v)) {
+        found = { url: v, type: /\.mp4/i.test(v) ? 'mp4' : 'hls', quality: 'Auto' };
+        break;
+      }
+    }
+    if (found) break;
+
+    found = findStreamUrl(t);
+  }
+  if (!found) { try { found = bruteFindStream(texts); } catch (e) { dbg.push('RV brute hata ' + e.message); } }
+  return { found: found, texts: texts };
+}
+
 function resolveRapid(embedUrl, pageUrl) {
   var origin = originOf(embedUrl);
-  return getText(embedUrl, {
-    'User-Agent': ANDROID_UA,
-    'Accept': 'text/html,*/*;q=0.8',
-    'Accept-Language': 'tr-TR,tr;q=0.9',
-    'Referer': pageUrl
-  }).then(function (html) {
-    if (!html) { stage = 'rapidvid sayfası boş'; return null; }
-    var texts = unpackAll(html), found = null;
-
-    for (var i = 0; i < texts.length && !found; i++) {
-      var t = texts[i];
-
-      var av = t.match(/av\('([^']+)'\)/);
-      if (av) {
-        try {
-          var d = decodeSecret(av[1]);
-          found = findStreamUrl(d) || (/^https?:\/\/\S+$/.test(d) ? { url: d, type: 'hls', quality: 'Auto' } : null);
-        } catch (e) {}
-      }
-      if (found) break;
-
-      var re = /"?file"?\s*:\s*"([^"]+)"/g, m;
-      while ((m = re.exec(t)) !== null) {
-        var v = hexUnescape(m[1]);
-        if (/^https?:\/\//.test(v) && !BAD_EXT.test(v)) {
-          found = { url: v, type: /\.mp4/i.test(v) ? 'mp4' : 'hls', quality: 'Auto' };
-          break;
-        }
-      }
-      if (found) break;
-
-      found = findStreamUrl(t);
+  function fetchEmbed(ua) {
+    return getText(embedUrl, {
+      'User-Agent': ua,
+      'Accept': 'text/html,*/*;q=0.8',
+      'Accept-Language': 'tr-TR,tr;q=0.9',
+      'Referer': pageUrl
+    });
+  }
+  return fetchEmbed(ANDROID_UA).then(function (html) {
+    var r = html ? extractRapid(html) : { found: null, texts: [] };
+    if (r.found) return { r: r, html: html, ua: ANDROID_UA };
+    // Mobil UA ile bulunamadıysa masaüstü UA ile dene (site farklı sayfa sunabiliyor)
+    return fetchEmbed(DESKTOP_UA).then(function (html2) {
+      var r2 = html2 ? extractRapid(html2) : { found: null, texts: [] };
+      if (r2.found) { dbg.push('RV masaustu UA ile bulundu'); return { r: r2, html: html2, ua: DESKTOP_UA }; }
+      return { r: r.found ? r : r2, html: html || html2 || '', ua: ANDROID_UA, fail: true, h1: html, h2: html2 };
+    });
+  }).then(function (o) {
+    if (o.fail) {
+      if (!o.html) { stage = 'rapidvid sayfası boş'; return null; }
+      try { rvDiag(o.h1 || o.html, o.r.texts); } catch (e) {}
+      if (o.h2 && o.h2 !== o.h1) dbg.push('RV masaustu len=' + o.h2.length);
+      stage = 'rapidvid link çıkmadı (' + o.html.length + ' bayt)';
+      return null;
     }
-    if (!found) { stage = 'rapidvid link çıkmadı (' + html.length + ' bayt)'; return null; }
-    found.headers = { 'User-Agent': ANDROID_UA, 'Referer': origin + '/' };
+    var found = o.r.found;
+    found.headers = { 'User-Agent': o.ua, 'Referer': origin + '/' };
     return found;
   });
 }
@@ -475,7 +568,7 @@ function makeStream(label, r) {
 
 function debugStream(msg) {
   if (!SITE_AYARLARI.DEBUG_MODU) return [];
-  var rows = [msg].concat(dbg.slice(0, 14));
+  var rows = [msg].concat(dbg.slice(0, 40));
   return rows.map(function (r) {
     return {
       name: 'DEBUG ' + r,
