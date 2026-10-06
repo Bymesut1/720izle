@@ -37,6 +37,7 @@ function withTimeout(promise, ms) {
 }
 
 var dbg = [];
+var dbgR = [];
 var DESKTOP_UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36';
 
 function getText(url, headers, label) {
@@ -433,12 +434,17 @@ function resolveRapid(embedUrl, pageUrl) {
     if (!found) {
       stage = 'rapidvid link çıkmadı (' + html.length + ' bayt)';
       var all = texts.join('\n');
-      dbg.push('R ev' + (texts.length - 1) + ' av' + (all.indexOf('av(') > -1 ? 1 : 0) + ' file' + (all.indexOf('file') > -1 ? 1 : 0) + ' atob' + (all.indexOf('atob') > -1 ? 1 : 0) + ' hex' + (all.indexOf('\\x') > -1 ? 1 : 0));
-      var c1 = ctx(all, 'file', 90), c2 = ctx(all, 'av(', 90), c3 = ctx(all, 'atob', 90);
-      if (c1) dbg.push('Rfile ' + c1);
-      if (c2) dbg.push('Rav ' + c2);
-      if (c3) dbg.push('Ratob ' + c3);
-      if (!c1 && !c2 && !c3) dbg.push('Rbas ' + String(texts[texts.length - 1]).slice(0, 120).replace(/\s+/g, ' '));
+      var marks = ['eval(', 'av(', 'file', 'atob', 'fetch(', 'ajax', '.post(', 'sources', 'm3u8', 'jwplayer', 'player', 'token'];
+      dbgR.push('R ' + html.length + 'b ev' + (texts.length - 1) + ' ' + marks.map(function (k) { return k.replace(/\W/g, '') + (all.indexOf(k) > -1 ? '1' : '0'); }).join(' '));
+      var shown = 0;
+      ['file', 'av(', 'atob', 'fetch(', 'ajax', '.post(', 'sources', 'm3u8', 'token'].forEach(function (k) {
+        if (shown >= 6) return;
+        var c = ctx(all, k, 110);
+        if (c) { dbgR.push('R[' + k + '] ' + c); shown++; }
+      });
+      var srcs = (html.match(/<script[^>]+src="[^"]+"/g) || []).map(function (x) { return (x.match(/src="([^"]+)"/) || [])[1]; }).slice(0, 4);
+      if (srcs.length) dbgR.push('Rsrc ' + srcs.join(' ').slice(0, 160));
+      if (!shown) dbgR.push('Rbas ' + html.slice(0, 140).replace(/\s+/g, ' '));
       return null;
     }
     found.headers = { 'User-Agent': ANDROID_UA, 'Referer': origin + '/' };
@@ -538,7 +544,7 @@ function makeStream(label, r) {
 
 function debugStream(msg) {
   if (!SITE_AYARLARI.DEBUG_MODU) return [];
-  var rows = [msg].concat(dbg.slice(0, 14));
+  var rows = [msg].concat(dbgR.slice(0, 9), dbg.slice(0, 8));
   return rows.map(function (r) {
     return {
       name: 'DEBUG ' + r,
@@ -554,6 +560,7 @@ function getStreams(tmdbId, mediaType, season, episode) {
   if (mediaType !== 'movie') return Promise.resolve([]);
   stage = 'tmdb';
   dbg = [];
+  dbgR = [];
 
   return withTimeout(fetch(
     'https://api.themoviedb.org/3/movie/' + tmdbId + '?language=tr-TR&api_key=' + TMDB_KEY
