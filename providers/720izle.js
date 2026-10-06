@@ -1,5 +1,5 @@
 // ============================================================
-//  720izle — Nuvio Provider (Geliştirilmiş Sürüm)
+//  720izle — Nuvio Provider (Seyret2 / Hotstream Desteği)
 // ============================================================
 
 var PRIMARY_DOMAIN = 'https://720izle.net';
@@ -29,7 +29,7 @@ async function fetchText(url, reqHeaders) {
   }
 }
 
-// Embed / Iframe İçindeki Video Yayın Linkini Çözme
+// Embed / Iframe İçindeki Gizli Seyret2 / Hotstream Yayın Linkini Çözme
 async function resolveEmbed(embedUrl) {
   if (!embedUrl) return null;
   if (embedUrl.startsWith('//')) embedUrl = 'https:' + embedUrl;
@@ -40,17 +40,31 @@ async function resolveEmbed(embedUrl) {
   });
   if (!html) return null;
 
-  // m3u8 adresi regex taraması
-  var m3u8Match = html.match(/https?:\/\/[^"'\s\\]+\.m3u8[^"'\s\\]*/i);
-  if (m3u8Match) {
-    var streamUrl = m3u8Match[0].replace(/\\\//g, '/');
+  var streamUrl = '';
+
+  // 1. Seyret2.top / process gizli yayın adresi yakalama
+  var processMatch = html.match(/https?:\/\/[^"'\s\\]*seyret[^"'\s\\]*\/process\/[^"'\s\\]+/i) ||
+                     html.match(/https?:\/\/[^"'\s\\]+\/process\/[^"'\s\\]+/i);
+
+  if (processMatch) {
+    streamUrl = processMatch[0].replace(/\\\//g, '/').replace(/&amp;/g, '&');
+  } else {
+    // 2. Standart m3u8 adresi yakalama (Yedek)
+    var m3u8Match = html.match(/https?:\/\/[^"'\s\\]+\.m3u8[^"'\s\\]*/i);
+    if (m3u8Match) {
+      streamUrl = m3u8Match[0].replace(/\\\//g, '/').replace(/&amp;/g, '&');
+    }
+  }
+
+  if (streamUrl) {
     return {
       url: streamUrl,
       type: 'hls',
       quality: 'Auto',
       headers: {
         'User-Agent': USER_AGENT,
-        'Referer': embedUrl
+        'Referer': 'https://hotstream.club/',
+        'Origin': 'https://hotstream.club'
       }
     };
   }
@@ -73,7 +87,7 @@ async function getStreams(tmdbId, mediaType, season, episode) {
 
     var candidateUrls = [];
 
-    // 1. Doğrudan URL Tahminleri (En hızlı sonuç için)
+    // Doğrudan URL Tahminleri
     if (origTitle) {
       var origSlug = slugify(origTitle);
       candidateUrls.push(PRIMARY_DOMAIN + '/filmler11/' + origSlug + '-izle/');
@@ -85,7 +99,7 @@ async function getStreams(tmdbId, mediaType, season, episode) {
       candidateUrls.push(PRIMARY_DOMAIN + '/' + titleSlug + '-izle/');
     }
 
-    // 2. Site İçi Arama Sonuçları
+    // Site İçi Arama Sonuçları
     var searchQueries = [origTitle, title].filter(Boolean);
     for (var i = 0; i < searchQueries.length; i++) {
       var searchHtml = await fetchText(PRIMARY_DOMAIN + '/?s=' + encodeURIComponent(searchQueries[i]));
