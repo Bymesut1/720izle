@@ -200,6 +200,23 @@ function pageInfo(html) {
   return { names: names, year: parseInt(year, 10) || 0 };
 }
 
+// "The Matrix 1" ~ "Matrix" / "The Matrix": baştaki 'the' ve sondaki 1-2 haneli sayı farkı kabul;
+// "Matrix Reloaded" gibi farklı filmler kabul edilmez.
+function nameMatches(siteName, wantList) {
+  var a = norm(siteName);
+  if (!a) return false;
+  var aa = a.replace(/^the/, '');
+  for (var i = 0; i < wantList.length; i++) {
+    var w = wantList[i], ww = w.replace(/^the/, '');
+    if (a === w || aa === ww) return true;
+    if (aa.indexOf(ww) === 0 && /^\d{1,2}$/.test(aa.slice(ww.length))) return true;
+    if (ww.indexOf(aa) === 0 && /^\d{1,2}$/.test(ww.slice(aa.length))) return true;
+    // uzun başlıklar site adında geçiyorsa (örn. 'Batman 2 Kara Şövalye'); yıl kontrolü ayrıca yapılır
+    if (w.length >= 7 && a.indexOf(w) > -1) return true;
+  }
+  return false;
+}
+
 // SIKI doğrulama: yıl (±1) + başlık eşleşmesi. Eşleşmezse sayfa kullanılmaz.
 function isRightMovie(html, title, origTitle, year) {
   var info = pageInfo(html);
@@ -207,8 +224,7 @@ function isRightMovie(html, title, origTitle, year) {
   if (!info.year || !y || Math.abs(info.year - y) > 1) return false;
   var want = [norm(title), norm(origTitle)].filter(function (n) { return n && n.length >= 2; });
   for (var i = 0; i < info.names.length; i++) {
-    var n = norm(info.names[i]);
-    if (n && want.indexOf(n) > -1) return true;
+    if (nameMatches(info.names[i], want)) return true;
   }
   return false;
 }
@@ -257,8 +273,8 @@ function findMoviePage(title, origTitle, year, imdbId) {
 
     function yearOk(c) { return c.year && Math.abs(c.year - y) <= 1; }
     function titleOk(c) {
-      var a = norm(c.title), b = norm(c.orig);
-      return (a && (a === nTitle || a === nOrig)) || (b && (b === nTitle || b === nOrig));
+      var want = [nTitle, nOrig].filter(function (n) { return n && n.length >= 2; });
+      return nameMatches(c.title, want) || nameMatches(c.orig, want);
     }
 
     cards.filter(function (c) { return yearOk(c) && titleOk(c); }).forEach(function (c) { add(c.path); });
@@ -270,12 +286,12 @@ function findMoviePage(title, origTitle, year, imdbId) {
     var candidates = paths.slice(0, 6);
     stage = 'aday=' + candidates.length;
     return Promise.all(candidates.map(function (p, pi) {
-      return getText(SITE_AYARLARI.PRIMARY_DOMAIN + p, null, 'P' + (pi + 1));
+      return getText(SITE_AYARLARI.PRIMARY_DOMAIN + p, null, null);
     })).then(function (pages) {
       pages.forEach(function (pg, pi) {
-        if (!pg) return;
+        if (!pg) { dbg.push('P' + (pi + 1) + ' bos'); return; }
         var inf = pageInfo(pg);
-        dbg.push('P' + (pi + 1) + ' yil' + inf.year + ' ' + (inf.names[0] || 'adyok'));
+        dbg.push('P' + (pi + 1) + ' y' + inf.year + ' ' + (inf.names[0] || 'adyok'));
       });
       for (var i = 0; i < pages.length; i++) {
         if (pages[i] && isRightMovie(pages[i], title, origTitle, year)) {
@@ -457,10 +473,10 @@ function makeStream(label, r) {
 
 function debugStream(msg) {
   if (!SITE_AYARLARI.DEBUG_MODU) return [];
-  var rows = [msg].concat(dbg.slice(0, 9));
+  var rows = [msg].concat(dbg.slice(0, 14));
   return rows.map(function (r) {
     return {
-      name: SITE_AYARLARI.EKLENTI_ADI,
+      name: 'DEBUG ' + r,
       title: 'DEBUG ' + r,
       url: 'https://debug.invalid/',
       quality: 'Auto',
