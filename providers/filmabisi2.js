@@ -155,7 +155,7 @@ function unpackAll(text) {
 }
 
 var BAD_EXT = /\.(vtt|srt|jpg|jpeg|png|webp|gif|css|js|ico|svg)(\?|$)/i;
-var CDN_HOST = /^https?:\/\/[^\/]*(?:\.shop|cdnimgs?\d*\.[a-z]+|static\d+\.[a-z]+)(?:[\/:?]|$)/i;
+var CDN_HOST = /^https?:\/\/[^\/]*(?:\.shop|pictabox\.[a-z]+|cdnimgs?\d*\.[a-z]+|static\d+\.[a-z]+)(?:[\/:?]|$)/i;
 
 function findStreamUrl(text) {
   text = hexUnescape(text).replace(/&amp;/g, '&');
@@ -532,15 +532,8 @@ function resolveOk(embedUrl) {
 }
 
 function resolveGeneric(embedUrl, pageUrl) {
-  return getText(embedUrl, {
-    'User-Agent': ANDROID_UA, 'Accept': 'text/html,*/*;q=0.8', 'Referer': pageUrl
-  }).then(function (html) {
-    if (!html) return null;
-    var texts = unpackAll(html), found = null;
-    for (var i = 0; i < texts.length && !found; i++) found = findStreamUrl(texts[i]);
-    if (found) found.headers = { 'User-Agent': ANDROID_UA, 'Referer': originOf(embedUrl) + '/' };
-    return found;
-  });
+  // vidmoxy (Fastly) ve bilinmeyen kaynaklar: RapidVid ile aynı çıkarma + UA yeniden denemesi
+  return resolveRapid(embedUrl, pageUrl);
 }
 
 function resolveSource(url, pageUrl) {
