@@ -36,10 +36,31 @@ function withTimeout(promise, ms) {
   });
 }
 
-function getText(url, headers) {
-  return withTimeout(fetch(url, { headers: headers || PAGE_HEADERS }), 9000)
-    .then(function (res) { return res.ok ? withTimeout(res.text(), 9000) : ''; })
-    .catch(function () { return ''; });
+var dbg = [];
+var DESKTOP_UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36';
+
+function getText(url, headers, label) {
+  function once(h) {
+    return withTimeout(fetch(url, { headers: h }), 9000).then(function (res) {
+      return withTimeout(res.text(), 9000).then(
+        function (t) { return { status: res.status, ok: res.ok, text: t || '' }; },
+        function () { return { status: res.status, ok: false, text: '' }; }
+      );
+    }).catch(function (e) { return { status: 0, ok: false, text: '', err: (e && e.message) || 'hata' }; });
+  }
+  var h = headers || PAGE_HEADERS;
+  return once(h).then(function (r) {
+    if (!r.ok && (r.status === 0 || r.status === 403 || r.status === 429 || r.status === 503) && /fullhdfilmizlesene/.test(url)) {
+      var h2 = {};
+      Object.keys(h).forEach(function (k) { h2[k] = h[k]; });
+      h2['User-Agent'] = DESKTOP_UA;
+      return once(h2).then(function (r2) { return r2.ok ? r2 : r; });
+    }
+    return r;
+  }).then(function (r) {
+    if (label) dbg.push(label + ' ' + (r.status || r.err || '?') + '/' + r.text.length);
+    return r.ok ? r.text : '';
+  });
 }
 
 function decodeHtml(s) {
@@ -223,8 +244,8 @@ function findMoviePage(title, origTitle, year, imdbId) {
 
   var queries = [imdbId, origTitle, title].filter(function (q, i, a) { return q && a.indexOf(q) === i; });
 
-  return Promise.all(queries.map(function (q) {
-    return getText(SITE_AYARLARI.PRIMARY_DOMAIN + SITE_AYARLARI.ARAMA_YOLU + encodeURIComponent(q));
+  return Promise.all(queries.map(function (q, qi) {
+    return getText(SITE_AYARLARI.PRIMARY_DOMAIN + SITE_AYARLARI.ARAMA_YOLU + encodeURIComponent(q), null, 'S' + (qi + 1));
   })).then(function (results) {
     var cards = [], loose = [];
     results.forEach(function (html) {
@@ -232,6 +253,7 @@ function findMoviePage(title, origTitle, year, imdbId) {
       allFilmPaths(html).forEach(function (p) { if (loose.indexOf(p) === -1) loose.push(p); });
     });
     log('arama: ' + cards.length + ' kart, ' + loose.length + ' link');
+    dbg.push('kart ' + cards.length + ' link ' + loose.length);
 
     function yearOk(c) { return c.year && Math.abs(c.year - y) <= 1; }
     function titleOk(c) {
@@ -247,9 +269,14 @@ function findMoviePage(title, origTitle, year, imdbId) {
 
     var candidates = paths.slice(0, 6);
     stage = 'aday=' + candidates.length;
-    return Promise.all(candidates.map(function (p) {
-      return getText(SITE_AYARLARI.PRIMARY_DOMAIN + p);
+    return Promise.all(candidates.map(function (p, pi) {
+      return getText(SITE_AYARLARI.PRIMARY_DOMAIN + p, null, 'P' + (pi + 1));
     })).then(function (pages) {
+      pages.forEach(function (pg, pi) {
+        if (!pg) return;
+        var inf = pageInfo(pg);
+        dbg.push('P' + (pi + 1) + ' yil' + inf.year + ' ' + (inf.names[0] || 'adyok'));
+      });
       for (var i = 0; i < pages.length; i++) {
         if (pages[i] && isRightMovie(pages[i], title, origTitle, year)) {
           return { url: SITE_AYARLARI.PRIMARY_DOMAIN + candidates[i], html: pages[i] };
@@ -430,18 +457,22 @@ function makeStream(label, r) {
 
 function debugStream(msg) {
   if (!SITE_AYARLARI.DEBUG_MODU) return [];
-  return [{
-    name: SITE_AYARLARI.EKLENTI_ADI,
-    title: 'DEBUG: ' + msg,
-    url: 'https://debug.invalid/',
-    quality: 'Auto',
-    provider: PROVIDER_ID
-  }];
+  var rows = [msg].concat(dbg.slice(0, 9));
+  return rows.map(function (r) {
+    return {
+      name: SITE_AYARLARI.EKLENTI_ADI,
+      title: 'DEBUG ' + r,
+      url: 'https://debug.invalid/',
+      quality: 'Auto',
+      provider: PROVIDER_ID
+    };
+  });
 }
 
 function getStreams(tmdbId, mediaType, season, episode) {
   if (mediaType !== 'movie') return Promise.resolve([]);
   stage = 'tmdb';
+  dbg = [];
 
   return withTimeout(fetch(
     'https://api.themoviedb.org/3/movie/' + tmdbId + '?language=tr-TR&api_key=' + TMDB_KEY
@@ -455,12 +486,12 @@ function getStreams(tmdbId, mediaType, season, episode) {
       stage = 'arama: ' + title + ' (' + year + ')';
 
       return findMoviePage(title, origTitle, year, info.imdb_id).then(function (found) {
-        if (!found) return debugStream('film sayfası bulunamadı / doğrulanamadı: ' + title + ' (' + year + ') ' + stage);
+        if (!found) return debugStream('sayfa yok: ' + title + ' ' + year);
         log('sayfa: ' + found.url);
 
         var sources = extractScxSources(found.html);
         if (!sources.length) sources = extractLegacySources(found.html);
-        if (!sources.length) return debugStream('sayfada kaynak (scx) yok: ' + found.url);
+        if (!sources.length) return debugStream('scx kaynak yok');
 
         return Promise.all(sources.map(function (s) {
           return resolveSource(s.url, found.url).catch(function () { return null; });
@@ -473,12 +504,12 @@ function getStreams(tmdbId, mediaType, season, episode) {
             var label = /rapid/i.test(sources[i].url) ? 'RapidVid' : sources[i].label;
             streams.push(makeStream(label, r));
           }
-          if (!streams.length) return debugStream('kaynak çözülemedi: ' + stage + ' | ' + sources[0].url);
+          if (!streams.length) return debugStream('cozulemedi: ' + stage);
           return streams;
         });
       });
     })
-    .catch(function (e) { return debugStream('hata: ' + (e && e.message) + ' @' + stage); });
+    .catch(function (e) { return debugStream('hata ' + (e && e.message) + ' ' + stage); });
 }
 
 if (typeof module !== 'undefined' && module.exports) {
