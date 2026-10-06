@@ -1,22 +1,14 @@
 {
-  "id": "fullhdfilmizlesene.nuvio.plugins",
-  "name": "FullHDFilmizlesene Plugin",
-  "logo": "https://www.google.com/s2/favicons?domain=fullhdfilmizlesene.now&sz=128",
+  "id": "com.fullhdfilmizlesene.provider",
+  "name": "FullHD Filmizlesene",
   "version": "1.0.0",
-  "author": "Bymesut",
-  "scrapers": [
-    {
-      "id": "fullhdfilmizlesene",
-      "name": "FullHDFilmizlesene",
-      "logo": "https://www.google.com/s2/favicons?domain=fullhdfilmizlesene.now&sz=128",
-      "version": "1.0.0",
-      "filename": "providers/fullhdfilmizlesene.js",
-      "supportedTypes": [
-        "movie"
-      ],
-      "contentLanguage": [
-        "tr"
-      ]
-    }
+  "manifestVersion": 1,
+  "description": "FullHD Filmizlesene sitesi için Atom/RapidVid ve Vidmoly destekli film izleme eklentisi.",
+  "author": "Developer",
+  "icon": "https://www.fullhdfilmizlesene.pw/favicon.ico",
+  "script": "720izle.js",
+  "language": "tr",
+  "types": [
+    "movie"
   ]
 }
