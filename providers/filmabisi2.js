@@ -9,7 +9,7 @@ var SITE_AYARLARI = {
   EKLENTI_ADI: 'filmabisi2',
   // true iken hiç akış bulunamazsa listede neden bulunamadığını yazan bir "DEBUG" satırı çıkar.
   // Her şey çalışınca false yap.
-  DEBUG_MODU: true
+  DEBUG_MODU: false
 };
 
 var TMDB_KEY = '000316508321ce461cf81e7c6815eec7';
@@ -37,7 +37,6 @@ function withTimeout(promise, ms) {
 }
 
 var dbg = [];
-var dbgR = [];
 var DESKTOP_UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36';
 
 function getText(url, headers, label) {
@@ -129,9 +128,12 @@ function decodeSecret(input) {
   return bytesToStr(b64ToBytes(inner));
 }
 
-// Dean Edwards packer açıcı: sayfada birden çok olabilir, iç içe de olabilir
-function unpackWith(p, a, c, k) {
-  p = p.replace(/\\'/g, "'").replace(/\\\\/g, '\\');
+// eval(function(p,a,c,k,e,d)...) açıcı
+function unpackPacked(src) {
+  var m = String(src || '').match(/eval\(function\(p,a,c,k,e,d\)\{[\s\S]*?\}\('([\s\S]*?)',(\d+),(\d+),'([\s\S]*?)'\.split\('\|'\)/);
+  if (!m) return '';
+  var p = m[1].replace(/\\'/g, "'").replace(/\\\\/g, '\\');
+  var a = parseInt(m[2], 10), c = parseInt(m[3], 10), k = m[4].split('|');
   function enc(n) {
     return (n < a ? '' : enc(Math.floor(n / a))) +
            ((n = n % a) > 35 ? String.fromCharCode(n + 29) : n.toString(36));
@@ -142,21 +144,14 @@ function unpackWith(p, a, c, k) {
 }
 
 function unpackAll(text) {
-  var first = String(text || '');
-  var out = [first], queue = [first];
-  for (var depth = 0; depth < 4 && queue.length; depth++) {
-    var next = [];
-    for (var qi = 0; qi < queue.length; qi++) {
-      var re = /\}\('((?:[^'\\]|\\[\s\S])*)',\s*(\d+)\s*,\s*(\d+)\s*,\s*'((?:[^'\\]|\\[\s\S])*)'\s*\.split\('\|'\)/g, m;
-      while ((m = re.exec(queue[qi])) !== null) {
-        var u = '';
-        try { u = unpackWith(m[1], parseInt(m[2], 10), parseInt(m[3], 10), m[4].split('|')); } catch (e) {}
-        if (u && out.indexOf(u) === -1) { out.push(u); next.push(u); }
-      }
-    }
-    queue = next;
+  var list = [String(text || '')], cur = list[0];
+  for (var i = 0; i < 3; i++) {
+    var u = unpackPacked(cur);
+    if (!u) break;
+    list.push(u);
+    cur = u;
   }
-  return out;
+  return list;
 }
 
 var BAD_EXT = /\.(vtt|srt|jpg|jpeg|png|webp|gif|css|js|ico|svg)(\?|$)/i;
@@ -222,23 +217,6 @@ function nameMatches(siteName, wantList) {
   return false;
 }
 
-var STOP = { the: 1, and: 1, ve: 1, bir: 1, film: 1, izle: 1, of: 1, an: 1 };
-function toks(x) {
-  return asciiLower(x).split(/[^a-z0-9]+/).filter(function (t) { return t.length >= 2 && !STOP[t]; });
-}
-// Çok kelimeli başlıklarda kelimelerin ≥%75'i her iki yönde tutuyorsa (yalnızca yıl birebir aynıyken kullanılır)
-function tokenMatch(siteName, wants) {
-  var st = toks(siteName);
-  if (st.length < 2) return false;
-  for (var i = 0; i < wants.length; i++) {
-    var wt = toks(wants[i]);
-    if (wt.length < 2) continue;
-    var hit = wt.filter(function (t) { return st.indexOf(t) > -1; }).length;
-    if (hit / wt.length >= 0.75 && hit / st.length >= 0.75) return true;
-  }
-  return false;
-}
-
 // SIKI doğrulama: yıl (±1) + başlık eşleşmesi. Eşleşmezse sayfa kullanılmaz.
 function isRightMovie(html, title, origTitle, year) {
   var info = pageInfo(html);
@@ -247,7 +225,6 @@ function isRightMovie(html, title, origTitle, year) {
   var want = [norm(title), norm(origTitle)].filter(function (n) { return n && n.length >= 2; });
   for (var i = 0; i < info.names.length; i++) {
     if (nameMatches(info.names[i], want)) return true;
-    if (info.year === y && tokenMatch(info.names[i], [title, origTitle])) return true;
   }
   return false;
 }
@@ -281,9 +258,7 @@ function findMoviePage(title, origTitle, year, imdbId) {
   var paths = [];
   function add(p) { if (p && paths.indexOf(p) === -1) paths.push(p); }
 
-  function simple(x) { return String(x || '').replace(/[:\-–—]/g, ' ').replace(/\s+/g, ' ').trim(); }
-  var queries = [imdbId, origTitle, title, simple(origTitle), simple(title)]
-    .filter(function (q, i, a) { return q && a.indexOf(q) === i; });
+  var queries = [imdbId, origTitle, title].filter(function (q, i, a) { return q && a.indexOf(q) === i; });
 
   return Promise.all(queries.map(function (q, qi) {
     return getText(SITE_AYARLARI.PRIMARY_DOMAIN + SITE_AYARLARI.ARAMA_YOLU + encodeURIComponent(q), null, 'S' + (qi + 1));
@@ -295,21 +270,15 @@ function findMoviePage(title, origTitle, year, imdbId) {
     });
     log('arama: ' + cards.length + ' kart, ' + loose.length + ' link');
     dbg.push('kart ' + cards.length + ' link ' + loose.length);
-    var shownY = 0, seenY = {};
-    cards.forEach(function (c) {
-      if (shownY >= 5 || seenY[c.path] || !c.year || Math.abs(c.year - y) > 1) return;
-      seenY[c.path] = 1; shownY++;
-      dbgR.push('Y' + c.year + ' ' + c.title + (c.orig ? ' / ' + c.orig : ''));
-    });
 
     function yearOk(c) { return c.year && Math.abs(c.year - y) <= 1; }
     function titleOk(c) {
       var want = [nTitle, nOrig].filter(function (n) { return n && n.length >= 2; });
-      return nameMatches(c.title, want) || nameMatches(c.orig, want) ||
-             (c.year === y && (tokenMatch(c.title, [title, origTitle]) || tokenMatch(c.orig, [title, origTitle])));
+      return nameMatches(c.title, want) || nameMatches(c.orig, want);
     }
 
-    cards.filter(function (c) { return yearOk(c) && titleOk(c); }).forEach(function (c) { add(c.path); });
+    var trusted = {};
+    cards.filter(function (c) { return yearOk(c) && titleOk(c); }).forEach(function (c) { trusted[c.path] = true; add(c.path); });
     cards.filter(function (c) { return titleOk(c); }).forEach(function (c) { add(c.path); });
     add(SITE_AYARLARI.FILM_YOLU + slugify(title) + '/');
     add(SITE_AYARLARI.FILM_YOLU + slugify(origTitle) + '/');
@@ -326,7 +295,8 @@ function findMoviePage(title, origTitle, year, imdbId) {
         dbg.push('P' + (pi + 1) + ' y' + inf.year + ' ' + (inf.names[0] || 'adyok'));
       });
       for (var i = 0; i < pages.length; i++) {
-        if (pages[i] && isRightMovie(pages[i], title, origTitle, year)) {
+        // Arama kartında yıl+başlık tuttuysa sayfa yılına bakma (sitede sayfa yılı yanlış olabiliyor)
+        if (pages[i] && (trusted[candidates[i]] || isRightMovie(pages[i], title, origTitle, year))) {
           return { url: SITE_AYARLARI.PRIMARY_DOMAIN + candidates[i], html: pages[i] };
         }
       }
@@ -372,56 +342,6 @@ function extractLegacySources(html) {
 
 // ---------------- Çözücüler ----------------
 
-
-function firstHttp(r) {
-  var f = findStreamUrl(r);
-  if (f) return f;
-  var urls = String(r).match(/https?:\/\/[^\s"'<>\\]+/g) || [];
-  for (var i = 0; i < urls.length; i++) {
-    if (!BAD_EXT.test(urls[i]) && !/rapidvid|google|gstatic|jwplayer/i.test(urls[i])) {
-      return { url: urls[i], type: /\.mp4/i.test(urls[i]) ? 'mp4' : 'hls', quality: 'Auto' };
-    }
-  }
-  return null;
-}
-
-// Metinlerdeki uzun kodlanmış dizeleri bilinen dönüşümlerle çözmeyi dene
-function bruteFind(texts) {
-  var seen = {};
-  for (var ti = 0; ti < texts.length; ti++) {
-    var t = String(texts[ti]).replace(/\\\\/g, '\\');
-    var re = /["'(]([A-Za-z0-9+\/=_\-\\]{40,})["')]/g, m;
-    while ((m = re.exec(t)) !== null) {
-      var str = m[1];
-      if (seen[str]) continue;
-      seen[str] = 1;
-      var tries = [
-        function () { return hexUnescape(str); },
-        function () { return bytesToStr(b64ToBytes(str)); },
-        function () { return bytesToStr(b64ToBytes(rot13(str))); },
-        function () { return bytesToStr(b64ToBytes(str.split('').reverse().join(''))); },
-        function () { return decodeSecret(str); },
-        function () { return bytesToStr(b64ToBytes(bytesToStr(b64ToBytes(str)))); }
-      ];
-      for (var k = 0; k < tries.length; k++) {
-        var r = '';
-        try { r = tries[k](); } catch (e) {}
-        if (r && /https?:\/\//.test(r)) {
-          var f = firstHttp(r);
-          if (f) return f;
-        }
-      }
-    }
-  }
-  return null;
-}
-
-function ctx(text, needle, n) {
-  var i = text.indexOf(needle);
-  if (i < 0) return '';
-  return text.slice(Math.max(0, i - 10), i + n).replace(/\s+/g, ' ');
-}
-
 function resolveRapid(embedUrl, pageUrl) {
   var origin = originOf(embedUrl);
   return getText(embedUrl, {
@@ -457,23 +377,7 @@ function resolveRapid(embedUrl, pageUrl) {
 
       found = findStreamUrl(t);
     }
-    if (!found) found = bruteFind(texts);
-    if (!found) {
-      stage = 'rapidvid link çıkmadı (' + html.length + ' bayt)';
-      var all = texts.join('\n');
-      var marks = ['eval(', 'av(', 'file', 'atob', 'fetch(', 'ajax', '.post(', 'sources', 'm3u8', 'jwplayer', 'player', 'token'];
-      dbgR.push('R ' + html.length + 'b ev' + (texts.length - 1) + ' ' + marks.map(function (k) { return k.replace(/\W/g, '') + (all.indexOf(k) > -1 ? '1' : '0'); }).join(' '));
-      var shown = 0;
-      ['file', 'av(', 'atob', 'fetch(', 'ajax', '.post(', 'sources', 'm3u8', 'token'].forEach(function (k) {
-        if (shown >= 6) return;
-        var c = ctx(all, k, 110);
-        if (c) { dbgR.push('R[' + k + '] ' + c); shown++; }
-      });
-      var srcs = (html.match(/<script[^>]+src="[^"]+"/g) || []).map(function (x) { return (x.match(/src="([^"]+)"/) || [])[1]; }).slice(0, 4);
-      if (srcs.length) dbgR.push('Rsrc ' + srcs.join(' ').slice(0, 160));
-      if (!shown) dbgR.push('Rbas ' + html.slice(0, 140).replace(/\s+/g, ' '));
-      return null;
-    }
+    if (!found) { stage = 'rapidvid link çıkmadı (' + html.length + ' bayt)'; return null; }
     found.headers = { 'User-Agent': ANDROID_UA, 'Referer': origin + '/' };
     return found;
   });
@@ -559,7 +463,7 @@ function resolveSource(url, pageUrl) {
 
 function makeStream(label, r) {
   return {
-    name: SITE_AYARLARI.EKLENTI_ADI + ' | ' + label,
+    name: SITE_AYARLARI.EKLENTI_ADI,
     title: label,
     url: r.url,
     quality: r.quality || 'Auto',
@@ -571,7 +475,7 @@ function makeStream(label, r) {
 
 function debugStream(msg) {
   if (!SITE_AYARLARI.DEBUG_MODU) return [];
-  var rows = [msg].concat(dbgR.slice(0, 9), dbg.slice(0, 8));
+  var rows = [msg].concat(dbg.slice(0, 14));
   return rows.map(function (r) {
     return {
       name: 'DEBUG ' + r,
@@ -587,7 +491,6 @@ function getStreams(tmdbId, mediaType, season, episode) {
   if (mediaType !== 'movie') return Promise.resolve([]);
   stage = 'tmdb';
   dbg = [];
-  dbgR = [];
 
   return withTimeout(fetch(
     'https://api.themoviedb.org/3/movie/' + tmdbId + '?language=tr-TR&api_key=' + TMDB_KEY
