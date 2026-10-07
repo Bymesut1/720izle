@@ -197,7 +197,11 @@ function pageInfo(html) {
   });
   var year = (html.match(/<title>[^<]*\((\d{4})\)/) || [])[1] ||
              (html.match(/\/yil\/(\d{4})-/) || [])[1] || '';
-  return { names: names, year: parseInt(year, 10) || 0 };
+  // h1'den sonraki ilk metin (film özeti). Site adı "Yenilmezler 4 Son Oyun" iken özet "Avengers: Endgame" diyebilir.
+  var hi = html.search(/<h1/i);
+  var region = hi > -1 ? html.substr(hi, 15000) : '';
+  region = norm(decodeHtml(region.replace(/<script[\s\S]*?<\/script>/gi, ' ').replace(/<style[\s\S]*?<\/style>/gi, ' ').replace(/<[^>]*>/g, ' '))).substr(0, 1500);
+  return { names: names, year: parseInt(year, 10) || 0, region: region };
 }
 
 // "The Matrix 1" ~ "Matrix" / "The Matrix": baştaki 'the' ve sondaki 1-2 haneli sayı farkı kabul;
@@ -218,15 +222,35 @@ function nameMatches(siteName, wantList) {
 }
 
 // SIKI doğrulama: yıl (±1) + başlık eşleşmesi. Eşleşmezse sayfa kullanılmaz.
-function isRightMovie(html, title, origTitle, year) {
+function wantList(title, origTitle, extra) {
+  return [title, origTitle].concat(extra || []).map(norm)
+    .filter(function (n, i, a) { return n && n.length >= 2 && a.indexOf(n) === i; });
+}
+
+function isRightMovie(html, title, origTitle, year, extra) {
   var info = pageInfo(html);
   var y = parseInt(year, 10);
   if (!info.year || !y || Math.abs(info.year - y) > 1) return false;
-  var want = [norm(title), norm(origTitle)].filter(function (n) { return n && n.length >= 2; });
+  var want = wantList(title, origTitle, extra);
   for (var i = 0; i < info.names.length; i++) {
     if (nameMatches(info.names[i], want)) return true;
   }
   return false;
+}
+
+// Yedek eşleşme: yıl tutuyor ve film özeti ORİJİNAL/İNGİLİZCE adla başlıyorsa (ilk ~350 karakter) doğru sayılır.
+// Dönen değer: eşleşme konumu (küçük = daha güvenilir), yoksa -1.
+function descMatchPos(html, title, origTitle, year, extra) {
+  var info = pageInfo(html);
+  var y = parseInt(year, 10);
+  if (!info.year || !y || Math.abs(info.year - y) > 1) return -1;
+  var want = wantList(title, origTitle, extra), best = -1;
+  want.forEach(function (w) {
+    if (w.length < 7) return;
+    var p = info.region.indexOf(w);
+    if (p > -1 && p < 350 && (best === -1 || p < best)) best = p;
+  });
+  return best;
 }
 
 function parseSearchCards(html) {
@@ -252,13 +276,24 @@ function allFilmPaths(html) {
   return out;
 }
 
-function findMoviePage(title, origTitle, year, imdbId) {
+function searchVariants(list) {
+  var out = [];
+  list.forEach(function (q) {
+    if (!q) return;
+    q = String(q).trim();
+    var v = q.replace(/[:\-–—!?,.'"’&]+/g, ' ').replace(/\s+/g, ' ').trim();
+    [q, v].forEach(function (x) { if (x && out.indexOf(x) === -1) out.push(x); });
+  });
+  return out.slice(0, 6);
+}
+
+function findMoviePage(title, origTitle, year, imdbId, extra) {
   var y = parseInt(year, 10);
-  var nTitle = norm(title), nOrig = norm(origTitle);
+  var want = wantList(title, origTitle, extra);
   var paths = [];
   function add(p) { if (p && paths.indexOf(p) === -1) paths.push(p); }
 
-  var queries = [imdbId, origTitle, title].filter(function (q, i, a) { return q && a.indexOf(q) === i; });
+  var queries = searchVariants([imdbId, origTitle, title].concat(extra || []));
 
   return Promise.all(queries.map(function (q, qi) {
     return getText(SITE_AYARLARI.PRIMARY_DOMAIN + SITE_AYARLARI.ARAMA_YOLU + encodeURIComponent(q), null, 'S' + (qi + 1));
@@ -273,20 +308,21 @@ function findMoviePage(title, origTitle, year, imdbId) {
 
     function yearOk(c) { return c.year && Math.abs(c.year - y) <= 1; }
     function titleOk(c) {
-      var want = [nTitle, nOrig].filter(function (n) { return n && n.length >= 2; });
       return nameMatches(c.title, want) || nameMatches(c.orig, want);
     }
 
     var trusted = {};
     cards.filter(function (c) { return yearOk(c) && titleOk(c); }).forEach(function (c) { trusted[c.path] = true; add(c.path); });
     cards.filter(function (c) { return titleOk(c); }).forEach(function (c) { add(c.path); });
+    // Site adı farklıysa (Yenilmezler 4 Son Oyun gibi): yılı tutan kartlar da aday olur, sayfa içinden doğrulanır
+    cards.filter(function (c) { return yearOk(c); }).forEach(function (c) { add(c.path); });
     add(SITE_AYARLARI.FILM_YOLU + slugify(title) + '/');
     add(SITE_AYARLARI.FILM_YOLU + slugify(origTitle) + '/');
     loose.forEach(function (p) { add(p); });
 
-    var candidates = paths.slice(0, 6);
+    var candidates = paths.slice(0, 10);
     stage = 'aday=' + candidates.length;
-    return Promise.all(candidates.map(function (p, pi) {
+    return Promise.all(candidates.map(function (p) {
       return getText(SITE_AYARLARI.PRIMARY_DOMAIN + p, null, null);
     })).then(function (pages) {
       pages.forEach(function (pg, pi) {
@@ -294,11 +330,23 @@ function findMoviePage(title, origTitle, year, imdbId) {
         var inf = pageInfo(pg);
         dbg.push('P' + (pi + 1) + ' y' + inf.year + ' ' + (inf.names[0] || 'adyok'));
       });
-      for (var i = 0; i < pages.length; i++) {
+      var i;
+      for (i = 0; i < pages.length; i++) {
         // Arama kartında yıl+başlık tuttuysa sayfa yılına bakma (sitede sayfa yılı yanlış olabiliyor)
-        if (pages[i] && (trusted[candidates[i]] || isRightMovie(pages[i], title, origTitle, year))) {
+        if (pages[i] && (trusted[candidates[i]] || isRightMovie(pages[i], title, origTitle, year, extra))) {
           return { url: SITE_AYARLARI.PRIMARY_DOMAIN + candidates[i], html: pages[i] };
         }
+      }
+      // Yedek: film özeti orijinal adla başlayan sayfa (en küçük konum kazanır)
+      var bestI = -1, bestPos = 1e9;
+      for (i = 0; i < pages.length; i++) {
+        if (!pages[i]) continue;
+        var pos = descMatchPos(pages[i], title, origTitle, year, extra);
+        if (pos > -1 && pos < bestPos) { bestPos = pos; bestI = i; }
+      }
+      if (bestI > -1) {
+        dbg.push('ozet eslesti P' + (bestI + 1));
+        return { url: SITE_AYARLARI.PRIMARY_DOMAIN + candidates[bestI], html: pages[bestI] };
       }
       return null;
     });
@@ -578,18 +626,21 @@ function getStreams(tmdbId, mediaType, season, episode) {
   stage = 'tmdb';
   dbg = [];
 
-  return withTimeout(fetch(
-    'https://api.themoviedb.org/3/movie/' + tmdbId + '?language=tr-TR&api_key=' + TMDB_KEY
-  ), 9000)
-    .then(function (res) { return res.json(); })
-    .then(function (info) {
+  var tmdbBase = 'https://api.themoviedb.org/3/movie/' + tmdbId + '?api_key=' + TMDB_KEY;
+  return Promise.all([
+    withTimeout(fetch(tmdbBase + '&language=tr-TR'), 9000).then(function (res) { return res.json(); }),
+    withTimeout(fetch(tmdbBase + '&language=en-US'), 9000).then(function (res) { return res.json(); }).catch(function () { return {}; })
+  ])
+    .then(function (both) {
+      var info = both[0], en = both[1] || {};
+      var extra = en.title ? [en.title] : [];
       var title = info.title;
       var origTitle = info.original_title;
       var year = (info.release_date || '').slice(0, 4);
       if (!title || !year) return debugStream('TMDB bilgisi eksik');
       stage = 'arama: ' + title + ' (' + year + ')';
 
-      return findMoviePage(title, origTitle, year, info.imdb_id).then(function (found) {
+      return findMoviePage(title, origTitle, year, info.imdb_id, extra).then(function (found) {
         if (!found) return debugStream('sayfa yok: ' + title + ' ' + year);
         log('sayfa: ' + found.url);
 
@@ -617,7 +668,7 @@ function getStreams(tmdbId, mediaType, season, episode) {
 }
 
 if (typeof module !== 'undefined' && module.exports) {
-  module.exports = { getStreams: getStreams, _t: { decodeToken: decodeToken, decodeSecret: decodeSecret, extractScxSources: extractScxSources, isRightMovie: isRightMovie, parseSearchCards: parseSearchCards, findStreamUrl: findStreamUrl, pageInfo: pageInfo } };
+  module.exports = { getStreams: getStreams, _t: { decodeToken: decodeToken, decodeSecret: decodeSecret, extractScxSources: extractScxSources, isRightMovie: isRightMovie, descMatchPos: descMatchPos, parseSearchCards: parseSearchCards, findStreamUrl: findStreamUrl, pageInfo: pageInfo } };
 } else {
   global.getStreams = getStreams;
 }
