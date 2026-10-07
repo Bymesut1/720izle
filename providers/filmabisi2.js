@@ -204,53 +204,101 @@ function pageInfo(html) {
   return { names: names, year: parseInt(year, 10) || 0, region: region };
 }
 
-// "The Matrix 1" ~ "Matrix" / "The Matrix": baştaki 'the' ve sondaki 1-2 haneli sayı farkı kabul;
-// "Matrix Reloaded" gibi farklı filmler kabul edilmez.
-function nameMatches(siteName, wantList) {
-  var a = norm(siteName);
-  if (!a) return false;
-  var aa = a.replace(/^the/, '');
+// ---------------- Başlık eşleştirme (puanlı, bulanık) ----------------
+// Sitedeki ad ile TMDB adı birebir aynı olmak zorunda değil:
+//   "The Matrix 4 Resurrections" ~ "Matrix Resurrections"   (baştaki The, ortadaki sıra numarası)
+//   "Yenilmezler 4 Son Oyun"     ~ "Avengers: Endgame"      (film özetindeki orijinal ad)
+var STOP_WORDS = { the: 1, a: 1, an: 1, of: 1, and: 1, ve: 1, ile: 1, film: 1, filmi: 1, izle: 1, movie: 1 };
+var ROMAN = { ii: 2, iii: 3, iv: 4, v: 5, vi: 6, vii: 7, viii: 8, ix: 9, x: 10 };
+
+function sigTokens(s) {
+  var words = [], nums = [];
+  asciiLower(s).split(/[^a-z0-9]+/).forEach(function (t) {
+    if (!t) return;
+    if (/^\d{1,2}$/.test(t)) { nums.push(parseInt(t, 10)); return; }
+    if (ROMAN[t]) { nums.push(ROMAN[t]); return; }
+    if (STOP_WORDS[t]) return;
+    words.push(t);
+  });
+  return { words: words, nums: nums };
+}
+
+// 0 = eşleşmedi, 2 = zayıf (tek kelime), 4 = kısmi, 6 = aynı kelimeler, 7 = birebir
+function nameScore(siteName, wantList) {
+  var best = 0;
+  var a = sigTokens(siteName), na = norm(siteName);
+  if (!na) return 0;
   for (var i = 0; i < wantList.length; i++) {
-    var w = wantList[i], ww = w.replace(/^the/, '');
-    if (a === w || aa === ww) return true;
-    if (aa.indexOf(ww) === 0 && /^\d{1,2}$/.test(aa.slice(ww.length))) return true;
-    if (ww.indexOf(aa) === 0 && /^\d{1,2}$/.test(ww.slice(aa.length))) return true;
-    // uzun başlıklar site adında geçiyorsa (örn. 'Batman 2 Kara Şövalye'); yıl kontrolü ayrıca yapılır
-    if (w.length >= 7 && a.indexOf(w) > -1) return true;
+    var w = wantList[i], nw = norm(w);
+    if (!nw) continue;
+    var sc = 0;
+    if (na === nw) sc = 7;
+    else {
+      var b = sigTokens(w);
+      if (!a.words.length || !b.words.length) continue;
+      if (a.nums.length && b.nums.length) {
+        var common = a.nums.some(function (n) { return b.nums.indexOf(n) > -1; });
+        if (!common) continue; // "Taken 2" ile "Taken 3" karışmasın
+      }
+      var inter = 0;
+      a.words.forEach(function (t) { if (b.words.indexOf(t) > -1) inter++; });
+      var small = Math.min(a.words.length, b.words.length);
+      if (inter === small) {
+        if (a.words.length === b.words.length) sc = 6;
+        else if (small >= 2) sc = 4;
+        else sc = 2;
+      }
+    }
+    if (sc > best) best = sc;
   }
-  return false;
+  return best;
 }
 
-// SIKI doğrulama: yıl (±1) + başlık eşleşmesi. Eşleşmezse sayfa kullanılmaz.
-function wantList(title, origTitle, extra) {
-  return [title, origTitle].concat(extra || []).map(norm)
-    .filter(function (n, i, a) { return n && n.length >= 2 && a.indexOf(n) === i; });
+function wantStrings(title, origTitle, extra) {
+  var out = [];
+  [title, origTitle].concat(extra || []).forEach(function (s) {
+    if (s && norm(s).length >= 2 && out.indexOf(s) === -1) out.push(s);
+  });
+  return out;
 }
 
-function isRightMovie(html, title, origTitle, year, extra) {
-  var info = pageInfo(html);
-  var y = parseInt(year, 10);
-  if (!info.year || !y || Math.abs(info.year - y) > 1) return false;
-  var want = wantList(title, origTitle, extra);
-  for (var i = 0; i < info.names.length; i++) {
-    if (nameMatches(info.names[i], want)) return true;
-  }
-  return false;
-}
-
-// Yedek eşleşme: yıl tutuyor ve film özeti ORİJİNAL/İNGİLİZCE adla başlıyorsa (ilk ~350 karakter) doğru sayılır.
-// Dönen değer: eşleşme konumu (küçük = daha güvenilir), yoksa -1.
-function descMatchPos(html, title, origTitle, year, extra) {
-  var info = pageInfo(html);
-  var y = parseInt(year, 10);
-  if (!info.year || !y || Math.abs(info.year - y) > 1) return -1;
-  var want = wantList(title, origTitle, extra), best = -1;
-  want.forEach(function (w) {
-    if (w.length < 7) return;
-    var p = info.region.indexOf(w);
-    if (p > -1 && p < 350 && (best === -1 || p < best)) best = p;
+// Film özeti (h1'den sonraki ilk ~350 karakter) orijinal/İngilizce adla başlıyorsa 3 puan
+function descScore(html, wantList) {
+  var info = pageInfo(html), best = 0;
+  wantList.forEach(function (w) {
+    var nw = norm(w);
+    if (nw.length < 7) return;
+    var p = info.region.indexOf(nw);
+    if (p > -1 && p < 350) best = 3;
   });
   return best;
+}
+
+// Aday değerlendirme: arama kartı ve/veya sayfa bilgisi birleştirilir. 0 = reddet, yüksek = iyi.
+function rankCandidate(c, wantList, y) {
+  var names = [], years = [];
+  if (c.card) { names.push(c.card.title, c.card.orig); years.push(c.card.year); }
+  var ds = 0;
+  if (c.html) {
+    var info = pageInfo(c.html);
+    names = names.concat(info.names);
+    years.push(info.year);
+    ds = descScore(c.html, wantList);
+  }
+  var ns = ds;
+  names.forEach(function (n) { if (n) ns = Math.max(ns, nameScore(n, wantList)); });
+  if (!ns) return 0;
+  var yd = 99;
+  years.forEach(function (yr) { if (yr) yd = Math.min(yd, Math.abs(yr - y)); });
+  if (yd > 2) return 0;
+  if (yd === 2 && ns < 6) return 0;          // 2 yıl fark: yalnızca ad birebir aynıysa
+  if (ns === 2 && yd !== 0) return 0;        // tek kelimelik zayıf eşleşme: yıl tam tutmalı
+  return ns * 10 + (3 - Math.min(yd, 3));
+}
+
+// Geriye dönük uyum (testler için)
+function isRightMovie(html, title, origTitle, year, extra) {
+  return rankCandidate({ html: html }, wantStrings(title, origTitle, extra), parseInt(year, 10)) > 0;
 }
 
 function parseSearchCards(html) {
@@ -278,77 +326,85 @@ function allFilmPaths(html) {
 
 function searchVariants(list) {
   var out = [];
+  function push(x) { x = String(x || '').replace(/\s+/g, ' ').trim(); if (x.length >= 2 && out.indexOf(x) === -1) out.push(x); }
   list.forEach(function (q) {
     if (!q) return;
     q = String(q).trim();
-    var v = q.replace(/[:\-–—!?,.'"’&]+/g, ' ').replace(/\s+/g, ' ').trim();
-    [q, v].forEach(function (x) { if (x && out.indexOf(x) === -1) out.push(x); });
+    var clean = q.replace(/[:\-–—!?,.'"’&]+/g, ' ');
+    push(q);
+    push(clean);
+    push(clean.replace(/^the\s+/i, ''));
+    if (q.indexOf(':') > 0) { push(q.split(':')[0]); push(q.split(':').slice(1).join(' ')); }
   });
-  return out.slice(0, 6);
+  return out;
+}
+
+// Son çare aramalar: başlığın en uzun 1-2 anlamlı kelimesi (geniş sonuç; yıl ve ad filtresi sayfada yapılır)
+function broadQueries(list) {
+  var words = [];
+  list.forEach(function (q) {
+    sigTokens(q).words.forEach(function (t) { if (t.length >= 4 && words.indexOf(t) === -1) words.push(t); });
+  });
+  words.sort(function (a, b) { return b.length - a.length; });
+  return words.slice(0, 2);
 }
 
 function findMoviePage(title, origTitle, year, imdbId, extra) {
   var y = parseInt(year, 10);
-  var want = wantList(title, origTitle, extra);
-  var paths = [];
-  function add(p) { if (p && paths.indexOf(p) === -1) paths.push(p); }
-
-  var queries = searchVariants([imdbId, origTitle, title].concat(extra || []));
+  var wants = wantStrings(title, origTitle, extra);
+  var base = [imdbId, origTitle, title].concat(extra || []);
+  var queries = searchVariants(base).slice(0, 7);
+  broadQueries(wants).forEach(function (q) { if (queries.indexOf(q) === -1) queries.push(q); });
+  queries = queries.slice(0, 9);
 
   return Promise.all(queries.map(function (q, qi) {
     return getText(SITE_AYARLARI.PRIMARY_DOMAIN + SITE_AYARLARI.ARAMA_YOLU + encodeURIComponent(q), null, 'S' + (qi + 1));
   })).then(function (results) {
-    var cards = [], loose = [];
+    var cardMap = {}, cardOrder = [], loose = [];
     results.forEach(function (html) {
-      parseSearchCards(html).forEach(function (c) { cards.push(c); });
+      parseSearchCards(html).forEach(function (c) {
+        if (!cardMap[c.path]) { cardMap[c.path] = c; cardOrder.push(c.path); }
+      });
       allFilmPaths(html).forEach(function (p) { if (loose.indexOf(p) === -1) loose.push(p); });
     });
-    log('arama: ' + cards.length + ' kart, ' + loose.length + ' link');
-    dbg.push('kart ' + cards.length + ' link ' + loose.length);
+    log('arama: ' + cardOrder.length + ' kart, ' + loose.length + ' link');
+    dbg.push('kart ' + cardOrder.length + ' link ' + loose.length);
 
-    function yearOk(c) { return c.year && Math.abs(c.year - y) <= 1; }
-    function titleOk(c) {
-      return nameMatches(c.title, want) || nameMatches(c.orig, want);
-    }
+    // Kart bilgisiyle ön puanlama
+    var scored = cardOrder.map(function (p) {
+      return { path: p, card: cardMap[p], rank: rankCandidate({ card: cardMap[p] }, wants, y) };
+    });
+    var good = scored.filter(function (c) { return c.rank > 0; }).sort(function (a, b) { return b.rank - a.rank; });
 
-    var trusted = {};
-    cards.filter(function (c) { return yearOk(c) && titleOk(c); }).forEach(function (c) { trusted[c.path] = true; add(c.path); });
-    cards.filter(function (c) { return titleOk(c); }).forEach(function (c) { add(c.path); });
-    // Site adı farklıysa (Yenilmezler 4 Son Oyun gibi): yılı tutan kartlar da aday olur, sayfa içinden doğrulanır
-    cards.filter(function (c) { return yearOk(c); }).forEach(function (c) { add(c.path); });
-    add(SITE_AYARLARI.FILM_YOLU + slugify(title) + '/');
-    add(SITE_AYARLARI.FILM_YOLU + slugify(origTitle) + '/');
-    loose.forEach(function (p) { add(p); });
+    var cands = [], seen = {};
+    function addC(c) { if (!seen[c.path] && cands.length < 10) { seen[c.path] = true; cands.push(c); } }
 
-    var candidates = paths.slice(0, 10);
-    stage = 'aday=' + candidates.length;
-    return Promise.all(candidates.map(function (p) {
-      return getText(SITE_AYARLARI.PRIMARY_DOMAIN + p, null, null);
-    })).then(function (pages) {
-      pages.forEach(function (pg, pi) {
-        if (!pg) { dbg.push('P' + (pi + 1) + ' bos'); return; }
-        var inf = pageInfo(pg);
-        dbg.push('P' + (pi + 1) + ' y' + inf.year + ' ' + (inf.names[0] || 'adyok'));
+    if (good.length && good[0].rank >= 60) {
+      good.slice(0, 3).forEach(addC);        // kesin eşleşme var: gereksiz sayfa çekme
+    } else {
+      good.slice(0, 6).forEach(addC);
+      [slugify(title), slugify(origTitle)].forEach(function (s) {
+        if (s) addC({ path: SITE_AYARLARI.FILM_YOLU + s + '/', rank: 0 });
       });
-      var i;
-      for (i = 0; i < pages.length; i++) {
-        // Arama kartında yıl+başlık tuttuysa sayfa yılına bakma (sitede sayfa yılı yanlış olabiliyor)
-        if (pages[i] && (trusted[candidates[i]] || isRightMovie(pages[i], title, origTitle, year, extra))) {
-          return { url: SITE_AYARLARI.PRIMARY_DOMAIN + candidates[i], html: pages[i] };
-        }
-      }
-      // Yedek: film özeti orijinal adla başlayan sayfa (en küçük konum kazanır)
-      var bestI = -1, bestPos = 1e9;
-      for (i = 0; i < pages.length; i++) {
-        if (!pages[i]) continue;
-        var pos = descMatchPos(pages[i], title, origTitle, year, extra);
-        if (pos > -1 && pos < bestPos) { bestPos = pos; bestI = i; }
-      }
-      if (bestI > -1) {
-        dbg.push('ozet eslesti P' + (bestI + 1));
-        return { url: SITE_AYARLARI.PRIMARY_DOMAIN + candidates[bestI], html: pages[bestI] };
-      }
-      return null;
+      scored.filter(function (c) { return c.rank === 0; }).slice(0, 4).forEach(addC);
+      loose.slice(0, 4).forEach(function (p) { addC({ path: p, card: cardMap[p], rank: 0 }); });
+    }
+    stage = 'aday=' + cands.length;
+
+    return Promise.all(cands.map(function (c) {
+      return getText(SITE_AYARLARI.PRIMARY_DOMAIN + c.path, null, null);
+    })).then(function (pages) {
+      var bestI = -1, bestRank = 0;
+      pages.forEach(function (pg, i) {
+        if (!pg) { dbg.push('P' + (i + 1) + ' bos'); return; }
+        cands[i].html = pg;
+        var inf = pageInfo(pg);
+        var r = rankCandidate(cands[i], wants, y);
+        dbg.push('P' + (i + 1) + ' y' + inf.year + ' ' + (inf.names[0] || 'adyok') + ' r' + r);
+        if (r > bestRank) { bestRank = r; bestI = i; }
+      });
+      if (bestI < 0) return null;
+      return { url: SITE_AYARLARI.PRIMARY_DOMAIN + cands[bestI].path, html: pages[bestI] };
     });
   });
 }
@@ -668,7 +724,7 @@ function getStreams(tmdbId, mediaType, season, episode) {
 }
 
 if (typeof module !== 'undefined' && module.exports) {
-  module.exports = { getStreams: getStreams, _t: { decodeToken: decodeToken, decodeSecret: decodeSecret, extractScxSources: extractScxSources, isRightMovie: isRightMovie, descMatchPos: descMatchPos, parseSearchCards: parseSearchCards, findStreamUrl: findStreamUrl, pageInfo: pageInfo } };
+  module.exports = { getStreams: getStreams, _t: { decodeToken: decodeToken, decodeSecret: decodeSecret, extractScxSources: extractScxSources, isRightMovie: isRightMovie, nameScore: nameScore, rankCandidate: rankCandidate, wantStrings: wantStrings, parseSearchCards: parseSearchCards, findStreamUrl: findStreamUrl, pageInfo: pageInfo } };
 } else {
   global.getStreams = getStreams;
 }
