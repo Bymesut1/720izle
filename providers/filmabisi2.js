@@ -9,7 +9,7 @@ var SITE_AYARLARI = {
   EKLENTI_ADI: 'filmabisi2',
   // true iken hiç akış bulunamazsa listede neden bulunamadığını yazan bir "DEBUG" satırı çıkar.
   // Her şey çalışınca false yap.
-  DEBUG_MODU: true
+  DEBUG_MODU: false
 };
 
 var TMDB_KEY = '000316508321ce461cf81e7c6815eec7';
