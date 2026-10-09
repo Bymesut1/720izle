@@ -9,7 +9,13 @@ var SITE_AYARLARI = {
   EKLENTI_ADI: 'filmabisi2',
   // true iken hiç akış bulunamazsa listede neden bulunamadığını yazan bir "DEBUG" satırı çıkar.
   // Her şey çalışınca false yap.
-  DEBUG_MODU: false
+  DEBUG_MODU: false,
+  // YANLIŞ FİLM KORUMASI: bulunan akışın süresi TMDB'deki film süresiyle karşılaştırılır; uymayan akış (başka film, reklam, fragman) listeye girmez.
+  SURE_KONTROL: true,
+  SURE_ALT: 0.78,        // tek parça film: süre / TMDB süresi en az bu kadar olmalı
+  SURE_UST: 1.3,         //                                       en fazla bu kadar
+  PARCA_ALT: 0.2,        // parçalı (Part 1/2...) kaynaklar için alt sınır
+  SURE_BEKLEME: 5000     // ms: süre okuma en geç bu sürede biter (okunamazsa akış korunur)
 };
 
 var TMDB_KEY = '000316508321ce461cf81e7c6815eec7';
@@ -201,7 +207,9 @@ function pageInfo(html) {
   var hi = html.search(/<h1/i);
   var region = hi > -1 ? html.substr(hi, 15000) : '';
   region = norm(decodeHtml(region.replace(/<script[\s\S]*?<\/script>/gi, ' ').replace(/<style[\s\S]*?<\/style>/gi, ' ').replace(/<[^>]*>/g, ' '))).substr(0, 1500);
-  return { names: names, year: parseInt(year, 10) || 0, region: region };
+  var origs = [];
+  [h2, ldAlt].forEach(function (n) { if (n) origs.push(decodeHtml(parseJsonString(n)).trim()); });
+  return { names: names, orig: origs, year: parseInt(year, 10) || 0, region: region };
 }
 
 // ---------------- Başlık eşleştirme (puanlı, bulanık) ----------------
@@ -274,16 +282,38 @@ function descScore(html, wantList) {
   return best;
 }
 
+// Sayfadaki IMDb kimlikleri (imdb.com/title/tt...)
+function imdbIds(html) {
+  var out = [], re = /imdb\.com\/title\/(tt\d{6,9})/g, m;
+  while ((m = re.exec(String(html || ''))) !== null) { if (out.indexOf(m[1]) === -1) out.push(m[1]); }
+  return out;
+}
+
 // Aday değerlendirme: arama kartı ve/veya sayfa bilgisi birleştirilir. 0 = reddet, yüksek = iyi.
-function rankCandidate(c, wantList, y) {
-  var names = [], years = [];
-  if (c.card) { names.push(c.card.title, c.card.orig); years.push(c.card.year); }
-  var ds = 0;
+// opt.origWants: TMDB'deki orijinal / İngilizce / alternatif adlar. opt.imdb: TMDB IMDb kimliği.
+// YANLIŞ FİLM KORUMASI: sitede aynı Türkçe ada sahip başka bir film olabilir (ör. "Yenilmezler" ~ "Yenilmezler 1").
+// Bu yüzden sitenin gösterdiği ORİJİNAL ad da TMDB'deki orijinal adlardan biriyle uyuşmalı, uyuşmuyorsa aday reddedilir.
+function rankCandidate(c, wantList, y, opt) {
+  opt = opt || {};
+  var names = [], years = [], origs = [], titles = [];
+  if (c.card) {
+    names.push(c.card.title, c.card.orig); years.push(c.card.year);
+    titles.push(c.card.title);
+    if (c.card.orig) origs.push(c.card.orig);
+  }
+  var ds = 0, imdbBonus = 0;
   if (c.html) {
     var info = pageInfo(c.html);
     names = names.concat(info.names);
+    if (info.names[0]) titles.push(info.names[0]);
+    (info.orig || []).forEach(function (o) { if (o) origs.push(o); });
     years.push(info.year);
     ds = descScore(c.html, wantList);
+    var ids = imdbIds(c.html);
+    if (opt.imdb && ids.length) {
+      if (ids.indexOf(opt.imdb) > -1) imdbBonus = 40;
+      else if (ids.length <= 2) return 0;      // sayfa başka bir IMDb kimliğine bağlı: başka film
+    }
   }
   var ns = ds;
   names.forEach(function (n) { if (n) ns = Math.max(ns, nameScore(n, wantList)); });
@@ -293,7 +323,19 @@ function rankCandidate(c, wantList, y) {
   if (yd > 2) return 0;
   if (yd === 2 && ns < 6) return 0;          // 2 yıl fark: yalnızca ad birebir aynıysa
   if (ns === 2 && yd !== 0) return 0;        // tek kelimelik zayıf eşleşme: yıl tam tutmalı
-  return ns * 10 + (3 - Math.min(yd, 3));
+
+  var origBonus = 0;
+  if (opt.origWants && opt.origWants.length) {
+    var tn = titles.map(norm);
+    var oc = origs.filter(function (o) { return norm(o).length >= 2 && tn.indexOf(norm(o)) === -1; });   // başlığın kopyası olan orijinal ad bilgi vermez
+    if (oc.length) {
+      var os = 0;
+      oc.forEach(function (o) { os = Math.max(os, nameScore(o, opt.origWants)); });
+      if (!os) return 0;                       // site orijinal adı TMDB'dekilerle hiç uyuşmuyor: başka film
+      if (os >= 6) origBonus = 20;
+    }
+  }
+  return ns * 10 + (3 - Math.min(yd, 3)) + origBonus + imdbBonus;
 }
 
 // Geriye dönük uyum (testler için)
@@ -349,7 +391,8 @@ function broadQueries(list) {
   return words.slice(0, 2);
 }
 
-function findMoviePage(title, origTitle, year, imdbId, extra) {
+function findMoviePage(title, origTitle, year, imdbId, extra, origWants) {
+  var opt = { origWants: origWants || [], imdb: imdbId || '' };
   var y = parseInt(year, 10);
   var wants = wantStrings(title, origTitle, extra);
   var base = [imdbId, origTitle, title].concat(extra || []);
@@ -372,7 +415,7 @@ function findMoviePage(title, origTitle, year, imdbId, extra) {
 
     // Kart bilgisiyle ön puanlama
     var scored = cardOrder.map(function (p) {
-      return { path: p, card: cardMap[p], rank: rankCandidate({ card: cardMap[p] }, wants, y) };
+      return { path: p, card: cardMap[p], rank: rankCandidate({ card: cardMap[p] }, wants, y, opt) };
     });
     var good = scored.filter(function (c) { return c.rank > 0; }).sort(function (a, b) { return b.rank - a.rank; });
 
@@ -394,17 +437,17 @@ function findMoviePage(title, origTitle, year, imdbId, extra) {
     return Promise.all(cands.map(function (c) {
       return getText(SITE_AYARLARI.PRIMARY_DOMAIN + c.path, null, null);
     })).then(function (pages) {
-      var bestI = -1, bestRank = 0;
+      var okList = [];
       pages.forEach(function (pg, i) {
         if (!pg) { dbg.push('P' + (i + 1) + ' bos'); return; }
         cands[i].html = pg;
         var inf = pageInfo(pg);
-        var r = rankCandidate(cands[i], wants, y);
-        dbg.push('P' + (i + 1) + ' y' + inf.year + ' ' + (inf.names[0] || 'adyok') + ' r' + r);
-        if (r > bestRank) { bestRank = r; bestI = i; }
+        var r = rankCandidate(cands[i], wants, y, opt);
+        dbg.push('P' + (i + 1) + ' y' + inf.year + ' ' + (inf.names[0] || 'adyok') + ' / ' + ((inf.orig && inf.orig[0]) || '-') + ' r' + r);
+        if (r > 0) okList.push({ url: SITE_AYARLARI.PRIMARY_DOMAIN + cands[i].path, html: pg, rank: r });
       });
-      if (bestI < 0) return null;
-      return { url: SITE_AYARLARI.PRIMARY_DOMAIN + cands[bestI].path, html: pages[bestI] };
+      okList.sort(function (a, b) { return b.rank - a.rank; });
+      return okList;                       // en iyiden başlayarak sıralı liste (boş olabilir)
     });
   });
 }
@@ -425,7 +468,7 @@ function extractScxSources(html) {
     ['t', 'p'].forEach(function (g) {
       (sx[g] || []).forEach(function (tok) {
         var u = decodeToken(tok);
-        if (u) list.push({ url: u, label: name });
+        if (u) list.push({ url: u, label: name, group: g });
       });
     });
   });
@@ -619,14 +662,15 @@ function resolveOk(embedUrl) {
       if (!meta) return null;
       var hls = meta.hlsManifestUrl || meta.ondemandHls || meta.hlsMasterPlaylistUrl;
       var hdr = { 'User-Agent': ANDROID_UA, 'Referer': 'https://ok.ru/' };
-      if (hls) return { url: hls, type: 'hls', quality: 'Auto', headers: hdr };
+      var okDur = parseInt((meta.movie && meta.movie.duration) || 0, 10) || 0;     // ok.ru: video süresi (sn)
+      if (hls) return { url: hls, type: 'hls', quality: 'Auto', headers: hdr, duration: okDur };
       var order = ['full', 'hd', 'sd', 'low', 'lowest', 'mobile'];
       var q = { full: '1080p', hd: '720p', sd: '480p', low: '360p', lowest: '240p', mobile: '144p' };
       var vids = meta.videos || [];
       for (var i = 0; i < order.length; i++) {
         for (var j = 0; j < vids.length; j++) {
           if (vids[j].name === order[i] && vids[j].url) {
-            return { url: vids[j].url, type: 'mp4', quality: q[order[i]], headers: hdr };
+            return { url: vids[j].url, type: 'mp4', quality: q[order[i]], headers: hdr, duration: okDur };
           }
         }
       }
@@ -645,6 +689,69 @@ function resolveSource(url, pageUrl) {
   if (/ok\.ru/.test(url)) return resolveOk(url);
   if (/vidmoly/.test(url)) return resolveVidmoly(url);
   return resolveGeneric(url, pageUrl);
+}
+
+// ---------------- Süre doğrulama (yanlış film koruması) ----------------
+
+function urlJoin(rel, base) {
+  rel = String(rel || '');
+  if (/^https?:\/\//i.test(rel)) return rel;
+  if (rel.indexOf('//') === 0) return 'https:' + rel;
+  if (rel.charAt(0) === '/') return originOf(base) + rel;
+  return String(base).replace(/[?#].*$/, '').replace(/[^\/]*$/, '') + rel;
+}
+
+function fetchPlain(url, headers, ms) {
+  return withTimeout(fetch(url, { headers: headers || { 'User-Agent': ANDROID_UA } }), ms).then(function (res) {
+    return withTimeout(res.text(), ms);
+  }).catch(function () { return ''; });
+}
+
+// HLS oynatma listesinin toplam süresi (sn). Ana liste ise ilk alt listeye inilir. Okunamazsa 0.
+function hlsDuration(url, headers, depth) {
+  return fetchPlain(url, headers, 4000).then(function (txt) {
+    txt = String(txt || '');
+    if (txt.indexOf('#EXTM3U') === -1) return 0;
+    if (/#EXT-X-STREAM-INF/.test(txt)) {
+      if (depth >= 1) return 0;
+      var lines = txt.split(/\r?\n/), sub = '';
+      for (var i = 0; i < lines.length; i++) {
+        if (/#EXT-X-STREAM-INF/.test(lines[i])) {
+          for (var j = i + 1; j < lines.length; j++) {
+            if (lines[j].trim() && lines[j].charAt(0) !== '#') { sub = lines[j].trim(); break; }
+          }
+          if (sub) break;
+        }
+      }
+      return sub ? hlsDuration(urlJoin(sub, url), headers, depth + 1) : 0;
+    }
+    var total = 0, re = /#EXTINF:\s*([0-9.]+)/g, m;
+    while ((m = re.exec(txt)) !== null) total += parseFloat(m[1]) || 0;
+    return total;
+  });
+}
+
+// Akışın süresi film süresine uyuyor mu? { ok, dur, ratio }. Süre okunamazsa ok:true (akış korunur).
+function verifyStream(r, runtimeMin, group) {
+  var exp = (runtimeMin || 0) * 60;
+  if (!SITE_AYARLARI.SURE_KONTROL || !exp) return Promise.resolve({ ok: true, dur: r.duration || 0, ratio: 0 });
+  var p = r.duration ? Promise.resolve(r.duration)
+        : (r.type === 'hls' ? hlsDuration(r.url, r.headers, 0) : Promise.resolve(0));
+  return withTimeout(p, SITE_AYARLARI.SURE_BEKLEME).catch(function () { return 0; }).then(function (d) {
+    d = Number(d) || 0;
+    if (!d) return { ok: true, dur: 0, ratio: 0 };
+    var ratio = d / exp;
+    if (ratio > 6) { d = d / 1000; ratio = d / exp; }          // milisaniye gelmiş olabilir
+    var lo = group === 'p' ? SITE_AYARLARI.PARCA_ALT : SITE_AYARLARI.SURE_ALT;
+    var hi = group === 'p' ? 1.15 : SITE_AYARLARI.SURE_UST;
+    return { ok: ratio >= lo && ratio <= hi, dur: Math.round(d), ratio: ratio };
+  });
+}
+
+function fmtDur(sec) {
+  if (!sec) return '';
+  var h = Math.floor(sec / 3600), m = Math.floor((sec % 3600) / 60);
+  return h + ':' + (m < 10 ? '0' : '') + m;
 }
 
 // ============================================================
@@ -684,7 +791,7 @@ function getStreams(tmdbId, mediaType, season, episode) {
 
   var tmdbBase = 'https://api.themoviedb.org/3/movie/' + tmdbId + '?api_key=' + TMDB_KEY;
   return Promise.all([
-    withTimeout(fetch(tmdbBase + '&language=tr-TR'), 9000).then(function (res) { return res.json(); }),
+    withTimeout(fetch(tmdbBase + '&language=tr-TR&append_to_response=alternative_titles,translations'), 9000).then(function (res) { return res.json(); }),
     withTimeout(fetch(tmdbBase + '&language=en-US'), 9000).then(function (res) { return res.json(); }).catch(function () { return {}; })
   ])
     .then(function (both) {
@@ -695,36 +802,64 @@ function getStreams(tmdbId, mediaType, season, episode) {
       var year = (info.release_date || '').slice(0, 4);
       if (!title || !year) return debugStream('TMDB bilgisi eksik');
       stage = 'arama: ' + title + ' (' + year + ')';
+      var runtime = info.runtime || en.runtime || 0;
 
-      return findMoviePage(title, origTitle, year, info.imdb_id, extra).then(function (found) {
-        if (!found) return debugStream('sayfa yok: ' + title + ' ' + year);
-        log('sayfa: ' + found.url);
+      // Orijinal taraftaki adlar: sitenin gösterdiği orijinal ad bunlardan biriyle uyuşmalı (yanlış film koruması)
+      var origWants = [];
+      function addOrig(t) { if (t && norm(t).length >= 2 && origWants.indexOf(t) === -1) origWants.push(t); }
+      addOrig(origTitle); addOrig(en.title);
+      try { ((info.alternative_titles && info.alternative_titles.titles) || []).forEach(function (a) { if (a) addOrig(a.title); }); } catch (e) {}
+      try { ((info.translations && info.translations.translations) || []).forEach(function (t) { if (t && t.data) addOrig(t.data.title); }); } catch (e) {}
+      origWants = origWants.slice(0, 40);
 
-        var sources = extractScxSources(found.html);
-        if (!sources.length) sources = extractLegacySources(found.html);
-        if (!sources.length) return debugStream('scx kaynak yok');
+      return findMoviePage(title, origTitle, year, info.imdb_id, extra, origWants).then(function (pagesFound) {
+        pagesFound = pagesFound || [];
+        if (!pagesFound.length) return debugStream('sayfa yok: ' + title + ' ' + year);
 
-        return Promise.all(sources.map(function (s) {
-          return resolveSource(s.url, found.url).catch(function () { return null; });
-        })).then(function (resolved) {
-          var streams = [], seen = {};
-          for (var i = 0; i < sources.length; i++) {
-            var r = resolved[i];
-            if (!r || seen[r.url]) continue;
-            seen[r.url] = true;
-            var label = /rapid/i.test(sources[i].url) ? 'RapidVid | ' + String(sources[i].label).toLowerCase() : sources[i].label;
-            streams.push(makeStream(label, r));
+        // En iyi sayfadan başla. Akışların süresi filme uymuyorsa (yanlış sayfa belirtisi) sıradaki sayfayı dene.
+        function attempt(pi, mismatchSeen) {
+          if (pi >= pagesFound.length || pi >= 3) {
+            return debugStream((mismatchSeen ? 'sure uyusmadi: ' : 'cozulemedi: ') + stage);
           }
-          if (!streams.length) return debugStream('cozulemedi: ' + stage);
-          return streams;
-        });
+          var found = pagesFound[pi];
+          log('sayfa: ' + found.url);
+          var sources = extractScxSources(found.html);
+          if (!sources.length) sources = extractLegacySources(found.html);
+          if (!sources.length) { dbg.push('scx kaynak yok ' + found.url); return attempt(pi + 1, mismatchSeen); }
+
+          return Promise.all(sources.map(function (s) {
+            return resolveSource(s.url, found.url).catch(function () { return null; });
+          })).then(function (resolved) {
+            return Promise.all(resolved.map(function (r, i) {
+              return r ? verifyStream(r, runtime, sources[i].group) : Promise.resolve(null);
+            })).then(function (checks) {
+              var streams = [], seen = {}, rejected = 0;
+              for (var i = 0; i < sources.length; i++) {
+                var r = resolved[i], v = checks[i];
+                if (!r || seen[r.url]) continue;
+                if (v && !v.ok) {
+                  rejected++;
+                  dbg.push('RED sure ' + sources[i].label + ' ' + fmtDur(v.dur) + ' / ' + runtime + 'dk (x' + v.ratio.toFixed(2) + ')');
+                  continue;
+                }
+                seen[r.url] = true;
+                var label = /rapid/i.test(sources[i].url) ? 'RapidVid | ' + String(sources[i].label).toLowerCase() : sources[i].label;
+                if (v && v.dur) label += ' | ' + fmtDur(v.dur);
+                streams.push(makeStream(label, r));
+              }
+              if (streams.length) return streams;
+              return attempt(pi + 1, mismatchSeen || rejected > 0);
+            });
+          });
+        }
+        return attempt(0, false);
       });
     })
     .catch(function (e) { return debugStream('hata ' + (e && e.message) + ' ' + stage); });
 }
 
 if (typeof module !== 'undefined' && module.exports) {
-  module.exports = { getStreams: getStreams, _t: { decodeToken: decodeToken, decodeSecret: decodeSecret, extractScxSources: extractScxSources, isRightMovie: isRightMovie, nameScore: nameScore, rankCandidate: rankCandidate, wantStrings: wantStrings, parseSearchCards: parseSearchCards, findStreamUrl: findStreamUrl, pageInfo: pageInfo } };
+  module.exports = { getStreams: getStreams, _t: { hlsDuration: hlsDuration, verifyStream: verifyStream, imdbIds: imdbIds, decodeToken: decodeToken, decodeSecret: decodeSecret, extractScxSources: extractScxSources, isRightMovie: isRightMovie, nameScore: nameScore, rankCandidate: rankCandidate, wantStrings: wantStrings, parseSearchCards: parseSearchCards, findStreamUrl: findStreamUrl, pageInfo: pageInfo } };
 } else {
   global.getStreams = getStreams;
 }
